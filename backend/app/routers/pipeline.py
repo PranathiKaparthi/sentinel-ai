@@ -24,7 +24,7 @@ The pipeline is strictly read-only.
 
 from fastapi import APIRouter, HTTPException
 
-from app.services.pipeline import ProcessingPipeline
+from app.agents.orchestrator_agent import OrchestratorAgent
 
 
 router = APIRouter(
@@ -37,13 +37,13 @@ router = APIRouter(
 def process_event(event: dict) -> dict:
     """
     Process one raw filesystem event through the complete
-    Phase 3 pipeline.
+    Phase 3 pipeline and the Phase 4 assessment layer.
 
-    Returns the complete pipeline result or HTTP 400 if
-    the event is invalid / processing fails safely.
+    This endpoint remains additive and read-only: it does not perform
+    any remediation or destructive action.
     """
 
-    result = ProcessingPipeline.process(event)
+    result = OrchestratorAgent.process(event)
 
     if result is None:
         raise HTTPException(

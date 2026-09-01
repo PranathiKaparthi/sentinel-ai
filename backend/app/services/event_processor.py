@@ -32,7 +32,7 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from app.models.security_event import SecurityEvent, split_path
+from app.models.security_event import SecurityEvent, _new_event_id, split_path
 from app.utils.logger import get_logger
 
 logger = get_logger("SentinelAI.EventProcessor")
@@ -71,6 +71,7 @@ class EventProcessor:
     @staticmethod
     def _process(raw_event: dict) -> Optional[SecurityEvent]:
         # --- Validation -------------------------------------------------
+        event_id = raw_event.get("event_id")
         event_type = raw_event.get("event_type")
         path = raw_event.get("path")
         timestamp = raw_event.get("timestamp")
@@ -107,6 +108,7 @@ class EventProcessor:
             file_size = EventProcessor._safe_file_size(path)
 
         return SecurityEvent(
+            event_id=event_id or _new_event_id(),
             event_type=event_type,
             path=path,
             timestamp=timestamp,
