@@ -15,7 +15,7 @@ from fastapi import FastAPI
 
 from app.config import settings
 from app.utils.logger import get_logger
-from app.routers import health, system, monitor, investigation, analysis, pipeline
+from app.routers import health, system, monitor, investigation, analysis, pipeline, security
 
 logger = get_logger("SentinelAI")
 
@@ -34,6 +34,7 @@ app.include_router(monitor.router)
 app.include_router(investigation.router)
 app.include_router(analysis.router)
 app.include_router(pipeline.router)
+app.include_router(security.router)
 
 
 @app.on_event("startup")
@@ -60,4 +61,5 @@ def root() -> dict:
         "investigation": "/api/investigation/investigate",
         "analysis": "/api/analysis/analyze",
         "pipeline": "/api/pipeline/process",
+        "security": "/api/security/analyze",
     }
