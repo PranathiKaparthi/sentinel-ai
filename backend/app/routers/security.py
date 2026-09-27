@@ -1,31 +1,33 @@
 """
 security.py
 
-FastAPI router for SentinelAI Phase 6 security analysis, Phase 7 decision,
-and Phase 8 response recommendation.
+FastAPI router for SentinelAI Phase 6-8 security analysis.
 
-Provides a dedicated endpoint for comprehensive security analysis
-using the SecurityAgent to coordinate the existing pipeline, then
-converts the threat classification into a safe decision recommendation,
-and finally generates a human-readable response recommendation.
+Provides a dedicated endpoint for comprehensive security analysis using
+the SecurityOrchestrator (Phase 9) which coordinates the complete
+Phase 1-8 pipeline:
 
-This endpoint returns the complete OrchestrationResult plus a decision
-field containing the structured SecurityDecision and a response_recommendation
-field containing the human-readable recommendation.
+Phase 1-5: Security event processing, investigation, and analysis
+Phase 6: Security analysis coordination
+Phase 7: Decision engine
+Phase 8: Response recommendation and explainability
+Phase 9: Centralized orchestration
+
+The orchestrator handles all business logic; this router is responsible
+for HTTP request/response handling only.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
-from app.agents.security_agent import SecurityAgent
-from app.services.decision_engine import DecisionEngine
-from app.services.response_recommendation import ResponseRecommendationEngine
+from app.repositories.security_event_repository import SecurityEventRepository
+from app.services.security_orchestrator import SecurityOrchestrator
 from app.utils.logger import get_logger
 
 logger = get_logger("SentinelAI.SecurityRouter")
 
-# Initialize the security agent once at module load
-_security_agent = SecurityAgent()
-_security_agent.start()
+# Initialize the security orchestrator once at module load
+_orchestrator = SecurityOrchestrator()
+_repository = SecurityEventRepository()
 
 
 router = APIRouter(
@@ -37,68 +39,107 @@ router = APIRouter(
 @router.post("/analyze")
 def analyze_event(event: dict) -> dict:
     """
-    Analyze a raw filesystem security event and produce a decision with recommendation.
+    Analyze a raw filesystem security event and produce a complete response.
 
-    Phase 6 — Security Analysis:
-    The SecurityAgent coordinates the complete security analysis pipeline:
-    - Event normalization (EventProcessor)
-    - Filesystem investigation (Investigator)
-    - Metadata analysis (Analyzer)
-    - Threat scoring (AnalysisAgent)
+    Phase 9 Orchestrator coordinates:
+    - Phase 1-5: Security event processing and threat scoring
+    - Phase 6: Security analysis coordination
+    - Phase 7: Decision engine (LOW→ALLOW, MEDIUM→ALERT, HIGH/CRITICAL→ESCALATE)
+    - Phase 8: Response recommendation and explainability
 
-    Phase 7 — Decision & Recommendation:
-    The DecisionEngine converts threat classification into a safe decision:
-    - LOW → ALLOW
-    - MEDIUM → ALERT
-    - HIGH/CRITICAL → ESCALATE
+    Returns:
+    - complete OrchestrationResult (Phase 1-5 data)
+    - decision (Phase 7 SecurityDecision)
+    - response_recommendation (Phase 8 ResponseRecommendation)
 
-    Phase 8 — Response Recommendation & Explainability:
-    The ResponseRecommendationEngine converts the decision into a human-readable
-    recommendation with explanation, evidence summary, and next steps.
-
-    Returns a consolidated result with threat classification, findings, decision,
-    and a human-readable response recommendation.
-
-    This endpoint remains read-only and does not perform any remediation
-    or destructive action. All decisions are recommendations only.
+    This endpoint remains read-only. All decisions are recommendations only.
+    No destructive or remediation actions are performed.
     """
 
-    result = _security_agent.analyze(event)
+    # Delegate all security analysis to the orchestrator
+    analysis_result = _orchestrator.process(event)
 
-    if result is None:
+    if analysis_result is None:
         raise HTTPException(
             status_code=400,
             detail="Invalid event or security analysis failed safely.",
         )
 
-    # Phase 7: Get the decision based on threat classification
-    decision = DecisionEngine.make_decision(
-        event_id=result.event_id,
-        threat_score=result.threat_score,
-        threat_level=result.threat_level,
+    # Response structure is identical to Phase 8 for backward compatibility
+    return analysis_result.to_dict()
+
+
+@router.get("/events")
+def list_events(
+    skip: int = Query(0, ge=0, description="Number of records to skip"),
+    limit: int = Query(100, ge=1, le=1000, description="Maximum records to return"),
+    threat_level: str | None = Query(
+        None, description="Filter by threat level (LOW, MEDIUM, HIGH, CRITICAL)"
+    ),
+    decision: str | None = Query(None, description="Filter by decision (ALLOW, ALERT, ESCALATE)"),
+    event_type: str | None = Query(
+        None, description="Filter by event type (created, modified, deleted, moved)"
+    ),
+) -> dict:
+    """
+    List persisted security events with optional filtering and pagination.
+
+    Phase 10 endpoint: Retrieve audit history of security event analysis.
+
+    Query Parameters:
+    - skip: Number of records to skip (default 0)
+    - limit: Maximum records to return (default 100, max 1000)
+    - threat_level: Filter by threat level
+    - decision: Filter by decision
+    - event_type: Filter by event type
+
+    Returns:
+    - events: List of persisted security event records
+    - total: Total count of records matching filters
+    - skip: Skip value used
+    - limit: Limit value used
+    """
+    records = _repository.list(
+        skip=skip,
+        limit=limit,
+        threat_level=threat_level,
+        decision=decision,
+        event_type=event_type,
     )
 
-    if decision is None:
-        raise HTTPException(
-            status_code=500,
-            detail="Decision engine failed safely; analysis available but decision unavailable.",
-        )
-
-    # Phase 8: Generate human-readable response recommendation
-    recommendation = ResponseRecommendationEngine.generate_recommendation(
-        security_decision=decision,
-        orchestration_data=result.to_dict(),
+    total = _repository.count(
+        threat_level=threat_level,
+        decision=decision,
+        event_type=event_type,
     )
 
-    if recommendation is None:
+    return {
+        "events": [record.to_dict() for record in records],
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+    }
+
+
+@router.get("/events/{event_id}")
+def get_event(event_id: str) -> dict:
+    """
+    Retrieve a specific persisted security event by event_id.
+
+    Phase 10 endpoint: Get details of a single analyzed event.
+
+    Args:
+        event_id: The unique event identifier
+
+    Returns:
+        The complete security event record with all analysis data
+    """
+    record = _repository.get_by_event_id(event_id)
+
+    if record is None:
         raise HTTPException(
-            status_code=500,
-            detail="Response recommendation engine failed safely; decision available but explanation unavailable.",
+            status_code=404,
+            detail=f"Event {event_id} not found",
         )
 
-    # Combine analysis, decision, and recommendation in response
-    response = result.to_dict()
-    response["decision"] = decision.to_dict()
-    response["response_recommendation"] = recommendation.to_dict()
-
-    return response
+    return record.to_dict()

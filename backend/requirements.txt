@@ -3,3 +3,4 @@ uvicorn[standard]
 psutil
 python-dotenv
 watchdog==6.0.0
+
