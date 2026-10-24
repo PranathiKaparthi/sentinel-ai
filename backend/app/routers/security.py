@@ -20,13 +20,13 @@ for HTTP request/response handling only.
 from fastapi import APIRouter, HTTPException, Query
 
 from app.repositories.security_event_repository import SecurityEventRepository
-from app.services.security_orchestrator import SecurityOrchestrator
+from app.services.security_orchestrator import get_security_orchestrator
 from app.utils.logger import get_logger
 
 logger = get_logger("SentinelAI.SecurityRouter")
 
 # Initialize the security orchestrator once at module load
-_orchestrator = SecurityOrchestrator()
+_orchestrator = get_security_orchestrator()
 _repository = SecurityEventRepository()
 
 
@@ -119,6 +119,33 @@ def list_events(
         "skip": skip,
         "limit": limit,
     }
+
+
+@router.get("/alerts")
+def list_alerts(
+    skip: int = Query(0, ge=0, description="Number of records to skip"),
+    limit: int = Query(100, ge=1, le=1000, description="Maximum records to return"),
+) -> dict:
+    """
+    List events that need human attention (decision ALERT or ESCALATE),
+    newest first. Includes events found by live monitoring.
+    """
+    records = _repository.list_alerts(skip=skip, limit=limit)
+    return {
+        "alerts": [record.to_dict() for record in records],
+        "total": _repository.count_alerts(),
+        "skip": skip,
+        "limit": limit,
+    }
+
+
+@router.get("/stats")
+def get_stats() -> dict:
+    """
+    Dashboard summary: total events, counts per threat level and decision,
+    and the average threat score (SQL GROUP BY over the events table).
+    """
+    return _repository.stats()
 
 
 @router.get("/events/{event_id}")

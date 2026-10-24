@@ -25,6 +25,7 @@ Design notes:
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from dataclasses import dataclass, field
 from pathlib import PureWindowsPath, PurePosixPath
@@ -34,6 +35,24 @@ from typing import Optional
 def _new_event_id() -> str:
     """Generate a short, unique id for a SecurityEvent."""
     return uuid.uuid4().hex
+
+
+def event_fingerprint(
+    event_type: str,
+    path: str,
+    timestamp: str,
+    destination_path: Optional[str] = None,
+) -> str:
+    """
+    Build a deterministic event id from the fields that identify an event.
+
+    The same filesystem event (same type, path, timestamp and destination)
+    always produces the same id. This makes processing idempotent: if an
+    event is delivered or submitted twice, the database UNIQUE constraint on
+    event_id recognises it as a duplicate instead of storing it again.
+    """
+    raw = "|".join([event_type, path, str(timestamp), destination_path or ""])
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
 
 def split_path(path: str) -> tuple[str, str, str]:

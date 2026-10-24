@@ -32,7 +32,7 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from app.models.security_event import SecurityEvent, _new_event_id, split_path
+from app.models.security_event import SecurityEvent, event_fingerprint, split_path
 from app.utils.logger import get_logger
 
 logger = get_logger("SentinelAI.EventProcessor")
@@ -108,7 +108,9 @@ class EventProcessor:
             file_size = EventProcessor._safe_file_size(path)
 
         return SecurityEvent(
-            event_id=event_id or _new_event_id(),
+            # Deterministic id => duplicate submissions are detected.
+            event_id=event_id
+            or event_fingerprint(event_type, path, timestamp, destination_path),
             event_type=event_type,
             path=path,
             timestamp=timestamp,

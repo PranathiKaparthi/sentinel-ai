@@ -4,12 +4,12 @@ main.py
 Entry point for the SentinelAI FastAPI backend.
 
 This file is intentionally thin: it creates the FastAPI app, wires up
-routers, and logs startup — it does not contain endpoint logic itself.
-Actual endpoint implementations live in app/routers/, and (in future
-phases) actual detection logic will live in app/services/ and
-app/agents/. Keeping main.py small makes the codebase easier to navigate
-as it grows.
+routers, and handles startup/shutdown. Endpoints live in app/routers/,
+detection logic in app/agents/ and app/services/, and database access in
+app/repositories/.
 """
+
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
@@ -19,11 +19,26 @@ from app.routers import health, system, monitor, investigation, analysis, pipeli
 
 logger = get_logger("SentinelAI")
 
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Log startup, and stop live monitoring cleanly on shutdown."""
+    logger.info(
+        "%s starting up (env=%s, log_level=%s)",
+        settings.app_name,
+        settings.app_env,
+        settings.log_level,
+    )
+    yield
+    monitor.shutdown()
+    logger.info("%s shut down cleanly", settings.app_name)
+
+
 app = FastAPI(
     title=settings.app_name,
-    description="Autonomous Multi-Agent System for Intelligent Malware, "
-    "Anomaly, Bug, and System Threat Detection — Phase 1 foundation.",
-    version="0.1.0-phase1",
+    description="Multi-agent, real-time file and process monitoring with "
+    "explainable threat scoring, decisions, alerts, and SQLite history.",
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 # Register routers. Each router owns its own URL prefix and tags, so this
@@ -35,17 +50,6 @@ app.include_router(investigation.router)
 app.include_router(analysis.router)
 app.include_router(pipeline.router)
 app.include_router(security.router)
-
-
-@app.on_event("startup")
-def on_startup() -> None:
-    """Log a clear startup message so it's obvious in the terminal when the app is ready."""
-    logger.info(
-        "%s starting up (env=%s, log_level=%s)",
-        settings.app_name,
-        settings.app_env,
-        settings.log_level,
-    )
 
 
 @app.get("/")
@@ -62,4 +66,9 @@ def root() -> dict:
         "analysis": "/api/analysis/analyze",
         "pipeline": "/api/pipeline/process",
         "security": "/api/security/analyze",
+        "security_events": "/api/security/events",
+        "alerts": "/api/security/alerts",
+        "stats": "/api/security/stats",
+        "processes": "/api/system/processes",
+        "suspicious_processes": "/api/system/processes/suspicious",
     }

@@ -20,11 +20,14 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 
 from app.agents.monitor_agent import MonitorAgent, MonitorDirectoryError
+from app.services.security_orchestrator import get_security_orchestrator
 
 router = APIRouter(prefix="/api/monitor", tags=["Monitor"])
 
 # Single shared agent instance for the life of the FastAPI process.
-_monitor_agent = MonitorAgent()
+# Every live event is forwarded to the shared SecurityOrchestrator, so it is
+# scored, given a decision, and saved to SQLite in real time.
+_monitor_agent = MonitorAgent(event_sink=get_security_orchestrator().process)
 
 
 @router.get("/status")
@@ -80,3 +83,8 @@ def stop_monitor() -> dict:
     """Stop MonitorAgent cleanly. Safe to call even if already stopped."""
     _monitor_agent.stop()
     return _monitor_agent.get_status()
+
+
+def shutdown() -> None:
+    """Stop the shared MonitorAgent (called once when the app shuts down)."""
+    _monitor_agent.stop()

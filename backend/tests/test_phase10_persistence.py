@@ -24,6 +24,58 @@ from app.repositories.security_event_repository import SecurityEventRepository
 from app.services.security_orchestrator import SecurityOrchestrator
 
 
+# ----------------------------------------------------------------------------
+# Factory helpers: build models through their real create() constructors so
+# tests stay valid when model fields (timestamps, ids) are added.
+# ----------------------------------------------------------------------------
+
+
+def make_orch(*, event_id, security_event, threat_score, threat_level,
+              investigation_result=None, suspicion_score=0):
+    return OrchestrationResult.create(
+        event_id=event_id,
+        security_event=security_event,
+        investigation=investigation_result or {},
+        analysis={},
+        suspicion_score=suspicion_score,
+        threat_score=threat_score,
+        threat_level=threat_level,
+        findings=[],
+        reasons=[],
+    )
+
+
+def make_dec(*, event_id, threat_score, threat_level, decision,
+             recommended_action, decision_reason, automated_action=False):
+    return SecurityDecision.create(
+        event_id=event_id,
+        threat_score=threat_score,
+        threat_level=threat_level,
+        decision=decision,
+        recommended_action=recommended_action,
+        decision_reason=decision_reason,
+    )
+
+
+def make_rec(*, summary, explanation, evidence, recommended_actions,
+             requires_human_review=False, confidence=0.5,
+             event_id="test-event", threat_score=0, threat_level="LOW",
+             decision_action="ALLOW", decision_recommendation="NONE"):
+    return ResponseRecommendation.create(
+        event_id=event_id,
+        threat_score=threat_score,
+        threat_level=threat_level,
+        decision_action=decision_action,
+        decision_recommendation=decision_recommendation,
+        summary=summary,
+        explanation=explanation,
+        evidence=evidence,
+        recommended_actions=recommended_actions,
+        confidence=confidence,
+        requires_human_review=requires_human_review,
+    )
+
+
 # ============================================================================
 # Fixtures
 # ============================================================================
@@ -46,7 +98,7 @@ def repository():
 @pytest.fixture
 def sample_orchestration_result() -> OrchestrationResult:
     """Create a sample orchestration result for testing."""
-    return OrchestrationResult(
+    return make_orch(
         event_id="test-event-001",
         security_event={
             "event_type": "created",
@@ -68,7 +120,7 @@ def sample_orchestration_result() -> OrchestrationResult:
 @pytest.fixture
 def sample_security_decision() -> SecurityDecision:
     """Create a sample security decision for testing."""
-    return SecurityDecision(
+    return make_dec(
         event_id="test-event-001",
         threat_score=15,
         threat_level="LOW",
@@ -82,7 +134,7 @@ def sample_security_decision() -> SecurityDecision:
 @pytest.fixture
 def sample_response_recommendation() -> ResponseRecommendation:
     """Create a sample response recommendation for testing."""
-    return ResponseRecommendation(
+    return make_rec(
         summary="Event is safe",
         explanation="File analysis indicates no threats",
         evidence=["file_type_benign", "size_normal", "no_suspicious_patterns"],
@@ -207,14 +259,14 @@ class TestSecurityEventRepository:
     def test_list_all_records(self, repository):
         """Test listing all records without filters."""
         # Create multiple records
-        orchestration = OrchestrationResult(
+        orchestration = make_orch(
             event_id="event-001",
             security_event={"event_type": "created", "path": "/test/a.txt"},
             investigation_result={},
             threat_score=15,
             threat_level="LOW",
         )
-        decision = SecurityDecision(
+        decision = make_dec(
             event_id="event-001",
             threat_score=15,
             threat_level="LOW",
@@ -223,19 +275,19 @@ class TestSecurityEventRepository:
             automated_action=False,
             decision_reason="Test",
         )
-        recommendation = ResponseRecommendation(
+        recommendation = make_rec(
             summary="Test", explanation="Test", evidence=[], recommended_actions=[]
         )
 
         for i in range(3):
-            orch = OrchestrationResult(
+            orch = make_orch(
                 event_id=f"event-{i:03d}",
                 security_event={"event_type": "created", "path": f"/test/{i}.txt"},
                 investigation_result={},
                 threat_score=15 + (i * 10),
                 threat_level=["LOW", "MEDIUM", "HIGH"][i],
             )
-            dec = SecurityDecision(
+            dec = make_dec(
                 event_id=f"event-{i:03d}",
                 threat_score=15 + (i * 10),
                 threat_level=["LOW", "MEDIUM", "HIGH"][i],
@@ -261,14 +313,14 @@ class TestSecurityEventRepository:
         """Test pagination with skip and limit."""
         # Create 10 records
         for i in range(10):
-            orch = OrchestrationResult(
+            orch = make_orch(
                 event_id=f"event-{i:03d}",
                 security_event={"event_type": "created"},
                 investigation_result={},
                 threat_score=10,
                 threat_level="LOW",
             )
-            dec = SecurityDecision(
+            dec = make_dec(
                 event_id=f"event-{i:03d}",
                 threat_score=10,
                 threat_level="LOW",
@@ -280,7 +332,7 @@ class TestSecurityEventRepository:
             result = SecurityAnalysisResult(
                 orchestration_result=orch,
                 security_decision=dec,
-                response_recommendation=ResponseRecommendation(
+                response_recommendation=make_rec(
                     summary="Test",
                     explanation="Test",
                     evidence=[],
@@ -305,14 +357,14 @@ class TestSecurityEventRepository:
     def test_list_filter_by_threat_level(self, repository):
         """Test filtering by threat level."""
         for i, level in enumerate(["LOW", "MEDIUM", "HIGH"]):
-            orch = OrchestrationResult(
+            orch = make_orch(
                 event_id=f"event-{i}",
                 security_event={"event_type": "created"},
                 investigation_result={},
                 threat_score=10 + (i * 20),
                 threat_level=level,
             )
-            dec = SecurityDecision(
+            dec = make_dec(
                 event_id=f"event-{i}",
                 threat_score=10 + (i * 20),
                 threat_level=level,
@@ -324,7 +376,7 @@ class TestSecurityEventRepository:
             result = SecurityAnalysisResult(
                 orchestration_result=orch,
                 security_decision=dec,
-                response_recommendation=ResponseRecommendation(
+                response_recommendation=make_rec(
                     summary="Test",
                     explanation="Test",
                     evidence=[],
@@ -343,14 +395,14 @@ class TestSecurityEventRepository:
         decisions = ["ALLOW", "ALERT", "ESCALATE"]
 
         for i, dec in enumerate(decisions):
-            orch = OrchestrationResult(
+            orch = make_orch(
                 event_id=f"event-{i}",
                 security_event={"event_type": "created"},
                 investigation_result={},
                 threat_score=10,
                 threat_level="MEDIUM",
             )
-            decision = SecurityDecision(
+            decision = make_dec(
                 event_id=f"event-{i}",
                 threat_score=10,
                 threat_level="MEDIUM",
@@ -362,7 +414,7 @@ class TestSecurityEventRepository:
             result = SecurityAnalysisResult(
                 orchestration_result=orch,
                 security_decision=decision,
-                response_recommendation=ResponseRecommendation(
+                response_recommendation=make_rec(
                     summary="Test",
                     explanation="Test",
                     evidence=[],
@@ -381,14 +433,14 @@ class TestSecurityEventRepository:
         event_types = ["created", "modified", "deleted"]
 
         for i, event_type in enumerate(event_types):
-            orch = OrchestrationResult(
+            orch = make_orch(
                 event_id=f"event-{i}",
                 security_event={"event_type": event_type, "path": "/test/file"},
                 investigation_result={},
                 threat_score=10,
                 threat_level="LOW",
             )
-            decision = SecurityDecision(
+            decision = make_dec(
                 event_id=f"event-{i}",
                 threat_score=10,
                 threat_level="LOW",
@@ -400,7 +452,7 @@ class TestSecurityEventRepository:
             result = SecurityAnalysisResult(
                 orchestration_result=orch,
                 security_decision=decision,
-                response_recommendation=ResponseRecommendation(
+                response_recommendation=make_rec(
                     summary="Test",
                     explanation="Test",
                     evidence=[],
@@ -416,14 +468,14 @@ class TestSecurityEventRepository:
 
     def test_list_combined_filters(self, repository):
         """Test combining multiple filters."""
-        orch = OrchestrationResult(
+        orch = make_orch(
             event_id="event-1",
             security_event={"event_type": "created", "path": "/test/file"},
             investigation_result={},
             threat_score=50,
             threat_level="MEDIUM",
         )
-        decision = SecurityDecision(
+        decision = make_dec(
             event_id="event-1",
             threat_score=50,
             threat_level="MEDIUM",
@@ -435,7 +487,7 @@ class TestSecurityEventRepository:
         result = SecurityAnalysisResult(
             orchestration_result=orch,
             security_decision=decision,
-            response_recommendation=ResponseRecommendation(
+            response_recommendation=make_rec(
                 summary="Test",
                 explanation="Test",
                 evidence=[],
@@ -457,14 +509,14 @@ class TestSecurityEventRepository:
         """Test counting all records."""
         # Create 5 records
         for i in range(5):
-            orch = OrchestrationResult(
+            orch = make_orch(
                 event_id=f"event-{i}",
                 security_event={"event_type": "created"},
                 investigation_result={},
                 threat_score=10,
                 threat_level="LOW",
             )
-            decision = SecurityDecision(
+            decision = make_dec(
                 event_id=f"event-{i}",
                 threat_score=10,
                 threat_level="LOW",
@@ -476,7 +528,7 @@ class TestSecurityEventRepository:
             result = SecurityAnalysisResult(
                 orchestration_result=orch,
                 security_decision=decision,
-                response_recommendation=ResponseRecommendation(
+                response_recommendation=make_rec(
                     summary="Test",
                     explanation="Test",
                     evidence=[],
@@ -492,14 +544,14 @@ class TestSecurityEventRepository:
         """Test counting with filters."""
         # Create records with different threat levels
         for i in range(3):
-            orch = OrchestrationResult(
+            orch = make_orch(
                 event_id=f"event-{i}",
                 security_event={"event_type": "created"},
                 investigation_result={},
                 threat_score=10 + (i * 20),
                 threat_level=["LOW", "MEDIUM", "HIGH"][i],
             )
-            decision = SecurityDecision(
+            decision = make_dec(
                 event_id=f"event-{i}",
                 threat_score=10 + (i * 20),
                 threat_level=["LOW", "MEDIUM", "HIGH"][i],
@@ -511,7 +563,7 @@ class TestSecurityEventRepository:
             result = SecurityAnalysisResult(
                 orchestration_result=orch,
                 security_decision=decision,
-                response_recommendation=ResponseRecommendation(
+                response_recommendation=make_rec(
                     summary="Test",
                     explanation="Test",
                     evidence=[],

@@ -22,8 +22,18 @@ from app.utils.logger import get_logger
 
 logger = get_logger("SentinelAI.Database")
 
-# Database file location - uses a relative path similar to test_environment
-DB_FILE = Path(__file__).parent.parent.parent / "security_events.db"
+# Default database file location (backend/security_events.db).
+DEFAULT_DB_FILE = Path(__file__).parent.parent.parent / "security_events.db"
+
+
+def get_db_path() -> Path:
+    """
+    Return the database file path.
+
+    SENTINEL_DB_PATH (environment / .env) overrides the default, so tests can
+    point at a temporary database and never touch real data.
+    """
+    return Path(os.getenv("SENTINEL_DB_PATH", str(DEFAULT_DB_FILE)))
 
 
 class Database:
@@ -66,11 +76,15 @@ class Database:
         """Establish SQLite connection."""
         try:
             # Enable row factory for dict-like access
-            self._connection = sqlite3.connect(str(DB_FILE), check_same_thread=False)
+            db_path = get_db_path()
+            # check_same_thread=False: the watchdog observer thread and API
+            # request threads share this connection, so writes are guarded
+            # by the repository's lock.
+            self._connection = sqlite3.connect(str(db_path), check_same_thread=False)
             self._connection.row_factory = sqlite3.Row
             # Enable foreign keys
             self._connection.execute("PRAGMA foreign_keys = ON")
-            logger.info(f"Database connection established: {DB_FILE}")
+            logger.info(f"Database connection established: {db_path}")
         except sqlite3.Error as e:
             logger.error(f"Database connection failed: {e}")
             raise

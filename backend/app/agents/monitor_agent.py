@@ -48,7 +48,7 @@ from __future__ import annotations
 import threading
 from collections import deque
 from pathlib import Path
-from typing import Deque, List, Optional
+from typing import Any, Callable, Deque, List, Optional
 
 from app.agents.base_agent import BaseAgent
 from app.config import settings
@@ -100,8 +100,20 @@ class MonitorAgent(BaseAgent):
     def __init__(
         self,
         name: str = "MonitorAgent",
+        event_sink: Optional[Callable[[dict], Any]] = None,
     ):
         super().__init__(name)
+
+        # Optional real-time hand-off. When set (the API wires it to the
+        # SecurityOrchestrator), every observed event is also scored,
+        # given a decision, and persisted to SQLite as it happens.
+        # Left as None, the agent behaves exactly as in Phase 2/3.
+        self._event_sink = event_sink
+
+        # Live alert counters (events whose decision was ALERT/ESCALATE).
+        self._analyzed_count = 0
+        self._alert_count = 0
+        self._last_alert: Optional[dict] = None
 
         # Bounded in-memory event history.
         self._events: Deque[dict] = deque(
@@ -203,6 +215,10 @@ class MonitorAgent(BaseAgent):
             with self._events_lock:
                 self._events.append(event_dict)
 
+            # Real-time analysis: forward the event (with its stable id)
+            # to the sink so it is scored, decided and persisted now.
+            self._forward_to_sink(raw_event, event_dict["event_id"])
+
             # Log moved events differently because they have both
             # source and destination paths.
             if event_dict["event_type"] == "moved":
@@ -226,6 +242,54 @@ class MonitorAgent(BaseAgent):
             self.logger.exception(
                 "MonitorAgent failed to process filesystem event: %r",
                 raw_event,
+            )
+
+    # ------------------------------------------------------------------
+    # Real-time analysis hand-off
+    # ------------------------------------------------------------------
+
+    def _forward_to_sink(self, raw_event: dict, event_id: str) -> None:
+        """
+        Send one event to the configured sink and track alerts.
+
+        Failures are logged and swallowed: analysis problems must never
+        stop filesystem monitoring.
+        """
+        if self._event_sink is None:
+            return
+
+        try:
+            result = self._event_sink({**raw_event, "event_id": event_id})
+        except Exception:
+            self.logger.exception("Event sink failed for event %s", event_id)
+            return
+
+        if result is None:
+            return
+
+        decision = getattr(
+            getattr(result, "security_decision", None), "decision", None
+        )
+
+        with self._events_lock:
+            self._analyzed_count += 1
+            if decision in ("ALERT", "ESCALATE"):
+                self._alert_count += 1
+                self._last_alert = {
+                    "event_id": event_id,
+                    "path": raw_event.get("path"),
+                    "decision": decision,
+                    "threat_level": getattr(result, "threat_level", None),
+                    "threat_score": getattr(result, "threat_score", None),
+                }
+
+        if decision in ("ALERT", "ESCALATE"):
+            self.logger.warning(
+                "ALERT %s (%s, score %s): %s",
+                decision,
+                getattr(result, "threat_level", "?"),
+                getattr(result, "threat_score", "?"),
+                raw_event.get("path"),
             )
 
     # ------------------------------------------------------------------
@@ -314,6 +378,9 @@ class MonitorAgent(BaseAgent):
 
         with self._events_lock:
             event_count = len(self._events)
+            analyzed_count = self._analyzed_count
+            alert_count = self._alert_count
+            last_alert = dict(self._last_alert) if self._last_alert else None
 
         return {
             "running": self.is_running(),
@@ -323,6 +390,10 @@ class MonitorAgent(BaseAgent):
                 else None
             ),
             "event_count": event_count,
+            "real_time_analysis": self._event_sink is not None,
+            "analyzed_count": analyzed_count,
+            "alert_count": alert_count,
+            "last_alert": last_alert,
         }
 
     # ------------------------------------------------------------------

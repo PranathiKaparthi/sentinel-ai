@@ -14,6 +14,7 @@ Handles all database CRUD operations with safety constraints:
 from __future__ import annotations
 
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -23,6 +24,13 @@ from app.models.security_analysis_result import SecurityAnalysisResult
 from app.utils.logger import get_logger
 
 logger = get_logger("SentinelAI.SecurityEventRepository")
+
+# Decisions that count as alerts (anything that needs a human to look at it).
+ALERT_DECISIONS = ("ALERT", "ESCALATE")
+
+# One SQLite connection is shared by API threads and the live-monitoring
+# thread, so inserts are serialised with a module-level lock.
+_write_lock = threading.Lock()
 
 
 class SecurityEventRepository:
@@ -64,50 +72,51 @@ class SecurityEventRepository:
 
             # Insert new record
             conn = Database.get_connection()
-            cursor = conn.cursor()
+            with _write_lock:
+                cursor = conn.cursor()
 
-            cursor.execute(
-                """
-                INSERT INTO security_events (
-                    event_id, event_type, path, timestamp, is_directory,
-                    destination_path, file_name, extension, parent_directory,
-                    file_size, suspicion_score, threat_score, threat_level,
-                    decision, recommended_action, automated_action,
-                    requires_human_review, confidence, decision_reason,
-                    summary, explanation, evidence, recommended_actions,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    record.event_id,
-                    record.event_type,
-                    record.path,
-                    record.timestamp,
-                    record.is_directory,
-                    record.destination_path,
-                    record.file_name,
-                    record.extension,
-                    record.parent_directory,
-                    record.file_size,
-                    record.suspicion_score,
-                    record.threat_score,
-                    record.threat_level,
-                    record.decision,
-                    record.recommended_action,
-                    record.automated_action,
-                    record.requires_human_review,
-                    record.confidence,
-                    record.decision_reason,
-                    record.summary,
-                    record.explanation,
-                    record.evidence,
-                    record.recommended_actions,
-                    record.created_at,
-                    record.updated_at,
-                ),
-            )
+                cursor.execute(
+                    """
+                    INSERT INTO security_events (
+                        event_id, event_type, path, timestamp, is_directory,
+                        destination_path, file_name, extension, parent_directory,
+                        file_size, suspicion_score, threat_score, threat_level,
+                        decision, recommended_action, automated_action,
+                        requires_human_review, confidence, decision_reason,
+                        summary, explanation, evidence, recommended_actions,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        record.event_id,
+                        record.event_type,
+                        record.path,
+                        record.timestamp,
+                        record.is_directory,
+                        record.destination_path,
+                        record.file_name,
+                        record.extension,
+                        record.parent_directory,
+                        record.file_size,
+                        record.suspicion_score,
+                        record.threat_score,
+                        record.threat_level,
+                        record.decision,
+                        record.recommended_action,
+                        record.automated_action,
+                        record.requires_human_review,
+                        record.confidence,
+                        record.decision_reason,
+                        record.summary,
+                        record.explanation,
+                        record.evidence,
+                        record.recommended_actions,
+                        record.created_at,
+                        record.updated_at,
+                    ),
+                )
 
-            conn.commit()
+                conn.commit()
 
             # Return the persisted record with id
             record.id = cursor.lastrowid
@@ -259,6 +268,86 @@ class SecurityEventRepository:
         except Exception:
             logger.exception("Failed to count security events")
             return 0
+
+    def list_alerts(self, skip: int = 0, limit: int = 100) -> list[SecurityEventRecord]:
+        """
+        List events whose decision is ALERT or ESCALATE, newest first.
+
+        These are the events that need human attention.
+        """
+        try:
+            conn = Database.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM security_events
+                WHERE decision IN (?, ?)
+                ORDER BY created_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (*ALERT_DECISIONS, limit, skip),
+            )
+            return [self._row_to_record(row) for row in cursor.fetchall()]
+        except Exception:
+            logger.exception("Failed to list alerts")
+            return []
+
+    def count_alerts(self) -> int:
+        """Count events whose decision is ALERT or ESCALATE."""
+        try:
+            conn = Database.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT COUNT(*) FROM security_events WHERE decision IN (?, ?)",
+                ALERT_DECISIONS,
+            )
+            return cursor.fetchone()[0]
+        except Exception:
+            logger.exception("Failed to count alerts")
+            return 0
+
+    def stats(self) -> dict:
+        """
+        Summary counts for a dashboard, computed with SQL GROUP BY.
+
+        Returns total events, counts per threat level, counts per decision,
+        and the average threat score.
+        """
+        by_level = {lvl: 0 for lvl in ("LOW", "MEDIUM", "HIGH", "CRITICAL")}
+        by_decision = {d: 0 for d in ("ALLOW", "ALERT", "ESCALATE")}
+        try:
+            conn = Database.get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute(
+                "SELECT COUNT(*), COALESCE(AVG(threat_score), 0) FROM security_events"
+            )
+            total, avg_score = cursor.fetchone()
+
+            cursor.execute(
+                "SELECT threat_level, COUNT(*) FROM security_events GROUP BY threat_level"
+            )
+            by_level.update({row[0]: row[1] for row in cursor.fetchall()})
+
+            cursor.execute(
+                "SELECT decision, COUNT(*) FROM security_events GROUP BY decision"
+            )
+            by_decision.update({row[0]: row[1] for row in cursor.fetchall()})
+
+            return {
+                "total_events": total,
+                "average_threat_score": round(float(avg_score), 1),
+                "by_threat_level": by_level,
+                "by_decision": by_decision,
+            }
+        except Exception:
+            logger.exception("Failed to compute statistics")
+            return {
+                "total_events": 0,
+                "average_threat_score": 0.0,
+                "by_threat_level": by_level,
+                "by_decision": by_decision,
+            }
 
     @staticmethod
     def _row_to_record(row: sqlite3.Row) -> SecurityEventRecord:

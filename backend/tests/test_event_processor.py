@@ -139,9 +139,16 @@ def test_file_size_none_for_nonexistent_file():
     assert event.file_size is None
 
 
-def test_each_event_gets_a_unique_id():
+def test_identical_events_get_the_same_id():
+    # Deterministic fingerprint: re-delivering the same event is a duplicate.
     e1 = EventProcessor.process(_raw())
     e2 = EventProcessor.process(_raw())
+    assert e1.event_id == e2.event_id
+
+
+def test_different_events_get_different_ids():
+    e1 = EventProcessor.process(_raw())
+    e2 = EventProcessor.process(_raw(event_type="deleted"))
     assert e1.event_id != e2.event_id
 
 

@@ -53,3 +53,38 @@ def system_status() -> dict:
         "memory_total_gb": _bytes_to_gb(memory.total),
         "memory_available_gb": _bytes_to_gb(memory.available),
     }
+
+
+# ----------------------------------------------------------------------
+# Phase 11: process monitoring (read-only)
+# ----------------------------------------------------------------------
+
+from fastapi import Query  # noqa: E402
+
+from app.services.process_monitor import ProcessMonitor  # noqa: E402
+
+
+@router.get("/processes")
+def top_processes(
+    limit: int = Query(10, ge=1, le=50, description="How many processes to return"),
+    sort_by: str = Query("cpu", pattern="^(cpu|memory)$", description="cpu or memory"),
+) -> dict:
+    """
+    Return the top processes by CPU or memory, each with a risk assessment.
+
+    Read-only: nothing is killed or modified.
+    """
+    processes = ProcessMonitor.top_processes(limit=limit, by=sort_by)
+    return {"processes": [p.to_dict() for p in processes], "sort_by": sort_by}
+
+
+@router.get("/processes/suspicious")
+def suspicious_processes(
+    min_score: int = Query(31, ge=0, le=100, description="Minimum risk score to include"),
+) -> dict:
+    """
+    Return processes whose rule-based risk score is at least `min_score`
+    (default 31 = MEDIUM or higher), highest risk first, with reasons.
+    """
+    flagged = ProcessMonitor.find_suspicious(min_score=min_score)
+    return {"count": len(flagged), "processes": [p.to_dict() for p in flagged]}

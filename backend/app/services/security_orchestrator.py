@@ -135,3 +135,24 @@ class SecurityOrchestrator:
     def stop(self) -> None:
         """Stop the orchestrator and clean up resources."""
         self._security_agent.stop()
+
+
+# ----------------------------------------------------------------------
+# Shared instance
+# ----------------------------------------------------------------------
+
+_shared_orchestrator: Optional[SecurityOrchestrator] = None
+
+
+def get_security_orchestrator() -> SecurityOrchestrator:
+    """
+    Return the one SecurityOrchestrator used by the whole API.
+
+    Both the /api/security router and the live MonitorAgent use this
+    instance, so manual analysis and real-time monitoring share the same
+    pipeline and the same database.
+    """
+    global _shared_orchestrator
+    if _shared_orchestrator is None:
+        _shared_orchestrator = SecurityOrchestrator()
+    return _shared_orchestrator
