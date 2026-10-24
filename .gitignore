@@ -41,3 +41,6 @@ frontend/dist/
 .env
 *.env
 
+
+# Local SQLite databases (created at runtime)
+*.db

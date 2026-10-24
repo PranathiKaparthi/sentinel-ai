@@ -1,93 +1,149 @@
 # SentinelAI
 
-**An Autonomous Multi-Agent System for Intelligent Malware, Anomaly, Bug, and System Threat Detection**
+**A multi-agent system for real-time file and process monitoring, with explainable threat scoring, decisions, alerts, and SQLite history.**
 
-## Current Status: Phase 2 — MonitorAgent
+SentinelAI watches a sandbox folder and the running processes on a machine, scores what it sees with transparent rules, decides whether a human needs to look, explains why, and stores every result in SQLite. It is **observation-only**: it never deletes, quarantines, or kills anything.
 
-Phase 1 (foundation) and Phase 2 (MonitorAgent) are both complete. See
-**PHASE1_GUIDE.md** for the foundational setup walkthrough and
-**PHASE2_GUIDE.md** for what was added in Phase 2 and how to test it.
+Built with Python, FastAPI, Watchdog, psutil, SQLite, and Pytest (190 automated tests).
 
-### Phase 1 — Foundation
+---
 
-This repository contains the Phase 1 foundation of SentinelAI:
+## How it works
 
-- A working FastAPI backend
-- Health check API
-- System status API (CPU / memory, via `psutil`)
-- Centralized configuration (`.env`)
-- Centralized logging
-- A `BaseAgent` class that will be the parent of all future agents
-  (MonitorAgent, InvestigationAgent, AnalysisAgent, DecisionAgent, ResponseAgent)
-- A safe, isolated `test_environment/` folder for future controlled monitoring
-
-Nothing in Phase 1 monitors your real filesystem, scans for malware, or performs
-any kind of detection yet. It is purely the scaffolding the rest of the system
-will be built on top of.
-
-### Phase 2 — MonitorAgent
-
-Phase 2 adds the first real agent, **MonitorAgent**, which watches the
-sandboxed `test_environment/` folder (via `settings.monitored_directory`)
-for file create/modify/delete/move events using `watchdog`, normalizes
-them, keeps the most recent 100 in memory, and exposes them through a
-new `/api/monitor/*` API. See **PHASE2_GUIDE.md** for full details.
-
-Still not built: InvestigationAgent, AnalysisAgent, DecisionAgent,
-ResponseAgent, Orchestrator, any malware/anomaly scoring, or the frontend.
-
-## Project Structure
-
-```text
-sentinel-ai/
-│
-├── backend/
-│   ├── app/
-│   │   ├── __init__.py
-│   │   ├── main.py
-│   │   ├── config.py
-│   │   ├── agents/
-│   │   │   ├── __init__.py
-│   │   │   ├── base_agent.py
-│   │   │   └── monitor_agent.py
-│   │   ├── routers/
-│   │   │   ├── __init__.py
-│   │   │   ├── health.py
-│   │   │   ├── system.py
-│   │   │   └── monitor.py
-│   │   ├── services/
-│   │   │   ├── __init__.py
-│   │   │   └── file_monitor.py
-│   │   └── utils/
-│   │       ├── __init__.py
-│   │       └── logger.py
-│   ├── tests/
-│   │   ├── __init__.py
-│   │   └── test_monitor_agent.py
-│   ├── .env
-│   ├── .env.example
-│   ├── requirements.txt
-│   └── .gitignore
-│
-├── frontend/            (empty — future phase)
-├── test_environment/    (safe sandbox folder, watched by MonitorAgent)
-├── README.md
-├── PHASE1_GUIDE.md
-├── PHASE2_GUIDE.md
-└── .gitignore
+```
+ file change in sandbox                     running processes
+          │                                         │
+          ▼                                         ▼
+   FileMonitor (watchdog)                  ProcessMonitor (psutil)
+          │                                 rule-based risk score
+          ▼                                         │
+   MonitorAgent ── keeps last 100 events            ▼
+          │                               /api/system/processes/suspicious
+          ▼   (real-time hand-off)
+   SecurityOrchestrator
+          │
+          ├─ SecurityAgent → OrchestratorAgent → ProcessingPipeline
+          │       EventProcessor  (validate + normalise, stable event id)
+          │       Investigator    (file metadata, read-only)
+          │       Analyzer        (observations)
+          │       AnalysisAgent   (suspicion / threat score 0–100)
+          │
+          ├─ DecisionEngine          LOW → ALLOW, MEDIUM → ALERT, HIGH/CRITICAL → ESCALATE
+          ├─ ResponseRecommendation  summary, explanation, evidence, next steps
+          │
+          ▼
+   SecurityEventRepository → SQLite (security_events table)
+          │
+          ▼
+   /api/security/events · /alerts · /stats
 ```
 
-## Quick Start (after setup — see PHASE1_GUIDE.md)
+### Agents
+| Agent | Job |
+| --- | --- |
+| `BaseAgent` | Shared lifecycle (start, stop, status, logging) for every agent |
+| `MonitorAgent` | Watches the sandbox with watchdog, normalises events, forwards them for real-time analysis, counts alerts |
+| `InvestigationAgent` | Collects safe file metadata (exists, size, type) |
+| `AnalysisAgent` | Applies scoring rules and returns findings and reasons |
+| `OrchestratorAgent` | Runs the pipeline stages in order for one event |
+| `SecurityAgent` | Entry point that combines orchestration and scoring |
+
+### Threat scoring (file events)
+Rule-based and explainable. Each rule adds points and a human-readable reason; the total is capped at 100.
+Example: a suspicious executable or script extension (`.exe`, `.ps1`, `.bat`, `.vbs`, …) adds 70 points.
+
+| Score | Level | Decision | Recommended action |
+| --- | --- | --- | --- |
+| 0–30 | LOW | ALLOW | NONE |
+| 31–60 | MEDIUM | ALERT | MONITOR |
+| 61–85 | HIGH | ESCALATE | REVIEW |
+| 86–100 | CRITICAL | ESCALATE | REVIEW |
+
+### Process scoring (psutil)
+| Rule | Points |
+| --- | --- |
+| CPU ≥ 80% | +30 |
+| Memory ≥ 25% | +20 |
+| Runs from a temp, downloads, or public folder | +35 |
+| Name imitates a system process (e.g. `svch0st.exe`) | +40 |
+| Script host running (PowerShell, wscript, …) | +10 |
+
+### Design decisions
+- **Idempotent events:** an event's id is a SHA-256 fingerprint of its type, path, timestamp and destination, so the same event submitted twice is stored once (UNIQUE constraint on `event_id`).
+- **Thread safety:** watchdog runs on its own thread; the in-memory event buffer and the SQLite writes are protected by locks.
+- **Safe by design:** the watched folder comes only from `.env` (clients cannot redirect it), and nothing is ever modified or killed.
+- **Failures never stop monitoring:** every stage catches and logs its own errors.
+- **Layered code:** routers (HTTP) → agents/services (logic) → repositories (SQL) → SQLite.
+
+---
+
+## API
+
+Interactive docs: `http://127.0.0.1:8000/docs`
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| GET | `/api/health` | Health check |
+| GET | `/api/system/status` | CPU and memory usage |
+| GET | `/api/system/processes?limit=10&sort_by=cpu` | Top processes with risk assessment |
+| GET | `/api/system/processes/suspicious?min_score=31` | Processes at MEDIUM risk or above, with reasons |
+| POST | `/api/monitor/start` · `/stop` | Start or stop live monitoring |
+| GET | `/api/monitor/status` | Running state, events seen, alerts raised, last alert |
+| GET | `/api/monitor/events?limit=50` | Recent normalised events |
+| POST | `/api/security/analyze` | Analyse one event manually (full pipeline) |
+| GET | `/api/security/events` | Stored history, with filters and pagination |
+| GET | `/api/security/events/{event_id}` | One stored event |
+| GET | `/api/security/alerts` | Events with decision ALERT or ESCALATE |
+| GET | `/api/security/stats` | Totals by threat level and decision, average score |
+
+---
+
+## Run it
 
 ```powershell
 cd sentinel-ai\backend
+py -m venv venv
 .\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+copy .env.example .env
 uvicorn app.main:app --reload
 ```
 
-Then visit:
-- http://127.0.0.1:8000
-- http://127.0.0.1:8000/docs
+Then open `http://127.0.0.1:8000/docs`, call `POST /api/monitor/start`, and create a file such as `test.exe` inside `test_environment/`. `GET /api/monitor/status` and `GET /api/security/alerts` will show the alert.
 
-See **PHASE1_GUIDE.md** for the full step-by-step walkthrough, including
-Windows-specific instructions, expected outputs, and troubleshooting.
+## Tests
+
+```powershell
+cd backend
+pytest -q
+```
+
+190 tests cover event processing, investigation, scoring, decisions, recommendations, orchestration, persistence, live monitoring with alerts, process monitoring, and the API. Tests use temporary folders and a temporary database, so they never touch real files or data.
+
+## Project structure
+
+```
+backend/
+  app/
+    agents/        BaseAgent, MonitorAgent, InvestigationAgent, AnalysisAgent, OrchestratorAgent, SecurityAgent
+    services/      file_monitor, process_monitor, event_processor, investigator, analyzer,
+                   pipeline, decision_engine, response_recommendation, security_orchestrator
+    repositories/  security_event_repository (all SQL)
+    db/            database (SQLite connection + schema)
+    models/        dataclasses / pydantic models for each stage's result
+    routers/       health, system, monitor, investigation, analysis, pipeline, security
+    utils/         logger
+    config.py      settings from .env
+    main.py        FastAPI app
+  tests/           Pytest suite
+test_environment/  safe sandbox folder that is monitored
+```
+
+## Development history
+Built in phases: foundation (1), MonitorAgent (2), processing pipeline (3), analysis and scoring (4), orchestration (5), security agent (6), decision engine (7), recommendations and explainability (8), central orchestrator (9), SQLite persistence (10), process monitoring (11), and real-time analysis with alerts and statistics (12). `PHASE1_GUIDE.md` and `PHASE2_GUIDE.md` document the first two phases in detail.
+
+## Possible next steps
+- React dashboard for alerts and statistics
+- Email or Slack notifications for ESCALATE decisions
+- Feed process risk into the same decision and persistence pipeline
+- Baseline-based anomaly detection (learn normal activity, flag deviations)
