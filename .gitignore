@@ -1,46 +1,4 @@
-# Environments
-backend/venv/
-backend/.env
-
-# Python
+venv/
 __pycache__/
 *.pyc
-*.pyo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# VS Code
-.vscode/
-
-# Testing / caches
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-
-# Node
-frontend/node_modules/
-frontend/dist/
-
-# Environment files
 .env
-*.env
-
-
-# Testing / caches
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-
-# Node
-frontend/node_modules/
-frontend/dist/
-
-# Environment files
-.env
-*.env
-
-
-# Local SQLite databases (created at runtime)
-*.db
