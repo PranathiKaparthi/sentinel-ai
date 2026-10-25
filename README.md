@@ -4,7 +4,7 @@
 
 SentinelAI watches one or more folders (a sandbox by default, or real folders such as Downloads and Desktop) and the running processes on a machine, scores what it sees with transparent rules, decides whether a human needs to look, explains why, and stores every result in SQLite. It is **observation-only**: it never deletes, quarantines, or kills anything.
 
-Built with Python, FastAPI, Watchdog, psutil, SQLite, and Pytest (203 automated tests), with a live web dashboard.
+Built with Python, FastAPI, Watchdog, psutil, SQLite, and Pytest (208 automated tests), with a live web dashboard.
 
 ---
 
@@ -62,10 +62,10 @@ Example: a suspicious executable or script extension (`.exe`, `.ps1`, `.bat`, `.
 ### Process scoring (psutil)
 | Rule | Points |
 | --- | --- |
-| CPU ≥ 80% | +30 |
+| CPU ≥ 80% of the whole machine (like Task Manager) | +30 |
 | Memory ≥ 25% | +20 |
 | Runs from a temp, downloads, or public folder | +35 |
-| Name imitates a system process (e.g. `svch0st.exe`) | +40 |
+| Name imitates a system process (e.g. `svch0st.exe`) and is not running from `C:\Windows\System32` | +40 |
 | Script host running (PowerShell, wscript, …) | +10 |
 
 ### Design decisions
@@ -145,7 +145,7 @@ cd backend
 pytest -q
 ```
 
-203 tests cover event processing, investigation, scoring, decisions, recommendations, orchestration, persistence, live monitoring with alerts, multi-folder watching and the noise filter, process monitoring, the dashboard, and the API. Tests use temporary folders and a temporary database, so they never touch real files or data.
+208 tests cover event processing, investigation, scoring, decisions, recommendations, orchestration, persistence, live monitoring with alerts, multi-folder watching and the noise filter, process monitoring, the dashboard, and the API. Tests use temporary folders and a temporary database, so they never touch real files or data.
 
 ## Project structure
 

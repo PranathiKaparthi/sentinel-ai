@@ -61,6 +61,21 @@ _SYSTEM_PROCESS_NAMES = (
     "smss.exe",
 )
 
+# Genuine Windows processes whose names happen to look like the names above
+# (e.g. sihost.exe vs svchost.exe). They are not disguises.
+_KNOWN_WINDOWS_PROCESSES = {
+    "sihost.exe", "dllhost.exe", "conhost.exe", "taskhostw.exe", "fontdrvhost.exe",
+    "dwm.exe", "ctfmon.exe", "runtimebroker.exe", "searchhost.exe", "wininit.exe",
+    "spoolsv.exe", "audiodg.exe", "lsaiso.exe", "smartscreen.exe",
+    "startmenuexperiencehost.exe", "shellexperiencehost.exe",
+}
+
+# Folders that genuine Windows system programs run from.
+_TRUSTED_SYSTEM_DIRS = ("\\windows\\system32\\", "\\windows\\syswow64\\")
+
+# Not real programs: Windows' idle-time counter and kernel placeholder.
+_PSEUDO_PROCESSES = {"system idle process", "idle"}
+
 _SCRIPT_HOSTS = ("powershell.exe", "pwsh.exe", "wscript.exe", "cscript.exe", "mshta.exe")
 
 
@@ -101,6 +116,8 @@ def _looks_like_system_name(name: str) -> Optional[str]:
     is a classic disguise, e.g. "scvhost.exe" or "svch0st.exe".
     """
     lowered = name.lower()
+    if lowered in _KNOWN_WINDOWS_PROCESSES:
+        return None
     for real in _SYSTEM_PROCESS_NAMES:
         if lowered == real:
             return None
@@ -128,9 +145,11 @@ def assess(info: ProcessInfo) -> ProcessInfo:
         reasons.append(f"Running from a temporary or downloads folder: {info.exe}")
 
     imitated = _looks_like_system_name(info.name or "")
-    if imitated:
+    in_trusted_dir = any(d in exe for d in _TRUSTED_SYSTEM_DIRS)
+    if imitated and not in_trusted_dir:
         score += 40
-        reasons.append(f"Name imitates system process {imitated}: {info.name}")
+        where = f" (running from {info.exe})" if info.exe else " (location hidden; check it in Task Manager)"
+        reasons.append(f"Name imitates system process {imitated}: {info.name}{where}")
 
     if (info.name or "").lower() in _SCRIPT_HOSTS:
         score += 10
@@ -154,7 +173,15 @@ class ProcessMonitor:
         `sample_seconds`, then read again. Processes that exit or deny
         access in between are skipped.
         """
-        procs = list(psutil.process_iter(["pid", "name", "exe", "username"]))
+        procs = [
+            p for p in psutil.process_iter(["pid", "name", "exe", "username"])
+            if p.info.get("pid") != 0
+            and (p.info.get("name") or "").lower() not in _PSEUDO_PROCESSES
+        ]
+        # psutil reports CPU per core (a busy process can show 400% on a
+        # 4-core machine). Divide by the core count so 100% = whole machine,
+        # matching Task Manager.
+        cores = psutil.cpu_count() or 1
         for proc in procs:
             try:
                 proc.cpu_percent(None)  # first call primes the counter
@@ -172,7 +199,7 @@ class ProcessMonitor:
                         name=proc.info.get("name") or "",
                         exe=proc.info.get("exe"),
                         username=proc.info.get("username"),
-                        cpu_percent=proc.cpu_percent(None),
+                        cpu_percent=round(proc.cpu_percent(None) / cores, 1),
                         memory_percent=round(proc.memory_percent(), 2),
                     )
                 )

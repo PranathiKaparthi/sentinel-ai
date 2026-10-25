@@ -112,3 +112,33 @@ def test_top_processes_endpoint(monkeypatch):
     resp = client.get("/api/system/processes?limit=2&sort_by=cpu")
     assert resp.status_code == 200
     assert [p["pid"] for p in resp.json()["processes"]] == [2, 3]
+
+
+def test_genuine_windows_lookalike_names_are_not_flagged():
+    # sihost.exe is a real Windows process even though it resembles svchost.exe.
+    p = assess(_proc(name="sihost.exe", exe=None))
+    assert p.risk_score == 0
+
+
+def test_lookalike_in_system32_is_trusted():
+    p = assess(_proc(name="servicehost.exe", exe="C:\\Windows\\System32\\servicehost.exe"))
+    assert p.risk_score == 0
+
+
+def test_lookalike_outside_system32_is_flagged_with_location():
+    p = assess(_proc(name="servicehost.exe", exe="C:\\Program Files\\Vendor\\servicehost.exe"))
+    assert p.risk_score == 40
+    assert any("running from" in r for r in p.reasons)
+
+
+def test_lookalike_with_hidden_location_says_so():
+    p = assess(_proc(name="svch0st.exe", exe=None))
+    assert p.risk_score == 40
+    assert any("Task Manager" in r for r in p.reasons)
+
+
+def test_snapshot_cpu_is_whole_machine_percent_and_skips_idle():
+    snapshot = ProcessMonitor.snapshot(sample_seconds=0.2)
+    assert all(0 <= p.cpu_percent <= 100 for p in snapshot)
+    assert all(p.pid != 0 for p in snapshot)
+    assert not any(p.name.lower() == "system idle process" for p in snapshot)
