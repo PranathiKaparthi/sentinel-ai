@@ -45,13 +45,15 @@ It does NOT:
 
 from __future__ import annotations
 
+import os
 import threading
 from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Deque, List, Optional
 
 from app.agents.base_agent import BaseAgent
-from app.config import settings
+from app.config import settings, split_setting_list
+from app.db.database import get_db_path
 from app.services.file_monitor import FileMonitor
 from app.services.pipeline import ProcessingPipeline
 
@@ -124,43 +126,117 @@ class MonitorAgent(BaseAgent):
         # may execute from observer threads.
         self._events_lock = threading.Lock()
 
-        # Currently monitored directory.
-        self._watch_path: Optional[Path] = None
+        # Currently monitored directories (one FileMonitor per directory).
+        self._watch_paths: List[Path] = []
+        self._file_monitors: List[FileMonitor] = []
 
-        # Underlying filesystem monitor.
-        self._file_monitor: Optional[FileMonitor] = None
+        # Noise filter, built from settings when monitoring starts.
+        self._ignored_names: set[str] = set()
+        self._ignored_suffixes: tuple[str, ...] = ()
+        self._ignored_count = 0
+
+    @property
+    def _watch_path(self) -> Optional[Path]:
+        """First watched directory (kept for backward compatibility)."""
+        return self._watch_paths[0] if self._watch_paths else None
+
+    @property
+    def _file_monitor(self) -> Optional[FileMonitor]:
+        """First FileMonitor (kept for backward compatibility)."""
+        return self._file_monitors[0] if self._file_monitors else None
 
     # ------------------------------------------------------------------
     # Directory validation
     # ------------------------------------------------------------------
 
-    def _resolve_and_validate_directory(self) -> Path:
+    def _resolve_and_validate_directories(self) -> List[Path]:
         """
-        Resolve and validate the configured monitored directory.
+        Resolve the configured directories (one, or several separated by ";").
+
+        Missing entries are skipped with a warning. A folder that sits inside
+        another watched folder is dropped, so no event is reported twice.
 
         Raises:
-            MonitorDirectoryError:
-                If the configured path does not exist or is not a directory.
+            MonitorDirectoryError: if none of the configured paths is a
+            usable directory.
         """
+        raw_value = settings.monitored_directory
+        valid: List[Path] = []
+        problems: List[str] = []
 
-        raw_path = settings.monitored_directory
+        for raw_path in split_setting_list(raw_value):
+            resolved = Path(raw_path).expanduser().resolve()
+            if not resolved.exists():
+                problems.append(f"does not exist: {resolved}")
+            elif not resolved.is_dir():
+                problems.append(f"is not a directory: {resolved}")
+            else:
+                valid.append(resolved)
 
-        resolved = Path(raw_path).resolve()
+        for problem in problems:
+            self.logger.warning("Skipping monitored directory that %s", problem)
 
-        if not resolved.exists():
+        if not valid:
             raise MonitorDirectoryError(
-                f"Configured monitored_directory does not exist: "
-                f"{resolved} "
-                f"(from settings value {raw_path!r})"
+                "Configured monitored_directory does not exist or is not a "
+                f"directory: {'; '.join(problems) or 'nothing configured'} "
+                f"(from settings value {raw_value!r})"
             )
 
-        if not resolved.is_dir():
-            raise MonitorDirectoryError(
-                f"Configured monitored_directory is not a directory: "
-                f"{resolved}"
-            )
+        # Drop folders already covered by a parent folder in the list.
+        unique: List[Path] = []
+        for path in sorted(set(valid), key=lambda p: len(p.parts)):
+            if not any(path == parent or parent in path.parents for parent in unique):
+                unique.append(path)
+        return unique
 
-        return resolved
+    # ------------------------------------------------------------------
+    # Noise filter
+    # ------------------------------------------------------------------
+
+    def _load_ignore_rules(self) -> None:
+        """Split IGNORE_PATTERNS into folder names and "*.ext" file patterns."""
+        names: set[str] = set()
+        suffixes: List[str] = []
+        for pattern in split_setting_list(settings.ignore_patterns):
+            if pattern.startswith("*."):
+                suffixes.append(pattern[1:].lower())  # "*.tmp" -> ".tmp"
+            else:
+                names.add(pattern.lower())
+        self._ignored_names = names
+        self._ignored_suffixes = tuple(suffixes)
+
+    def _is_ignored(self, raw_event: dict) -> bool:
+        """
+        True if an event is noise that should not be analysed.
+
+        - "Folder modified" events (the changed file reports its own event).
+        - SentinelAI's own database files are always ignored; otherwise every
+          save would create an event, which would be saved, and so on forever.
+        - Any path inside an ignored folder name (e.g. .git, AppData).
+        - Files ending in an ignored pattern (e.g. *.tmp).
+
+        For a rename, the NEW name is what matters (file.crdownload -> file.exe
+        must still be analysed).
+        """
+        # "Folder modified" only means something inside the folder changed, and
+        # that file already reports its own event. Skipping it removes most of
+        # the noise, and stops a feedback loop when SentinelAI's database lives
+        # inside a watched folder (save -> folder modified -> analyse -> save).
+        if raw_event.get("is_directory") and raw_event.get("event_type") == "modified":
+            return True
+
+        path = raw_event.get("destination_path") or raw_event.get("path") or ""
+        normalized = os.path.normcase(path)
+
+        if normalized.startswith(os.path.normcase(str(get_db_path().resolve()))):
+            return True
+
+        parts = {part.lower() for part in Path(path).parts}
+        if parts & self._ignored_names:
+            return True
+
+        return normalized.lower().endswith(self._ignored_suffixes) if self._ignored_suffixes else False
 
     # ------------------------------------------------------------------
     # Filesystem event callback
@@ -193,6 +269,11 @@ class MonitorAgent(BaseAgent):
         event history. The complete pipeline result remains available
         to the pipeline layer and future API/alerting layers.
         """
+
+        if self._is_ignored(raw_event):
+            with self._events_lock:
+                self._ignored_count += 1
+            return
 
         try:
             result = ProcessingPipeline.process(
@@ -311,11 +392,9 @@ class MonitorAgent(BaseAgent):
             )
             return
 
-        # Resolve and validate the monitored directory.
+        # Resolve and validate the monitored directories.
         try:
-            self._watch_path = (
-                self._resolve_and_validate_directory()
-            )
+            watch_paths = self._resolve_and_validate_directories()
         except MonitorDirectoryError as exc:
             self.logger.error(
                 "Failed to start %s: %s",
@@ -324,23 +403,28 @@ class MonitorAgent(BaseAgent):
             )
             raise
 
-        # Create the filesystem monitor.
-        self._file_monitor = FileMonitor(
-            self._watch_path,
-            self._on_event,
-        )
+        self._load_ignore_rules()
 
-        # Start observing filesystem changes.
-        self._file_monitor.start()
+        # One FileMonitor (watchdog observer) per directory.
+        monitors: List[FileMonitor] = []
+        try:
+            for path in watch_paths:
+                monitor = FileMonitor(path, self._on_event)
+                monitor.start()
+                monitors.append(monitor)
+        except Exception:
+            for monitor in monitors:
+                monitor.stop()
+            raise
+
+        self._watch_paths = watch_paths
+        self._file_monitors = monitors
 
         # Update BaseAgent state.
         super().start()
 
-        self.logger.info(
-            "%s watching directory: %s",
-            self.name,
-            self._watch_path,
-        )
+        for path in watch_paths:
+            self.logger.info("%s watching directory: %s", self.name, path)
 
     # ------------------------------------------------------------------
     # Stop
@@ -353,9 +437,9 @@ class MonitorAgent(BaseAgent):
         Safe to call repeatedly.
         """
 
-        if self._file_monitor is not None:
-            self._file_monitor.stop()
-            self._file_monitor = None
+        for monitor in self._file_monitors:
+            monitor.stop()
+        self._file_monitors = []
 
         if self.is_running():
             super().stop()
@@ -381,6 +465,7 @@ class MonitorAgent(BaseAgent):
             analyzed_count = self._analyzed_count
             alert_count = self._alert_count
             last_alert = dict(self._last_alert) if self._last_alert else None
+            ignored_count = self._ignored_count
 
         return {
             "running": self.is_running(),
@@ -389,7 +474,9 @@ class MonitorAgent(BaseAgent):
                 if self._watch_path
                 else None
             ),
+            "watching_all": [str(p) for p in self._watch_paths],
             "event_count": event_count,
+            "ignored_count": ignored_count,
             "real_time_analysis": self._event_sink is not None,
             "analyzed_count": analyzed_count,
             "alert_count": alert_count,

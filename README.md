@@ -2,9 +2,9 @@
 
 **A multi-agent system for real-time file and process monitoring, with explainable threat scoring, decisions, alerts, and SQLite history.**
 
-SentinelAI watches a sandbox folder and the running processes on a machine, scores what it sees with transparent rules, decides whether a human needs to look, explains why, and stores every result in SQLite. It is **observation-only**: it never deletes, quarantines, or kills anything.
+SentinelAI watches one or more folders (a sandbox by default, or real folders such as Downloads and Desktop) and the running processes on a machine, scores what it sees with transparent rules, decides whether a human needs to look, explains why, and stores every result in SQLite. It is **observation-only**: it never deletes, quarantines, or kills anything.
 
-Built with Python, FastAPI, Watchdog, psutil, SQLite, and Pytest (194 automated tests), with a live web dashboard.
+Built with Python, FastAPI, Watchdog, psutil, SQLite, and Pytest (203 automated tests), with a live web dashboard.
 
 ---
 
@@ -42,7 +42,7 @@ Built with Python, FastAPI, Watchdog, psutil, SQLite, and Pytest (194 automated 
 | Agent | Job |
 | --- | --- |
 | `BaseAgent` | Shared lifecycle (start, stop, status, logging) for every agent |
-| `MonitorAgent` | Watches the sandbox with watchdog, normalises events, forwards them for real-time analysis, counts alerts |
+| `MonitorAgent` | Watches the configured folders with watchdog, skips noise, normalises events, forwards them for real-time analysis, counts alerts |
 | `InvestigationAgent` | Collects safe file metadata (exists, size, type) |
 | `AnalysisAgent` | Applies scoring rules and returns findings and reasons |
 | `OrchestratorAgent` | Runs the pipeline stages in order for one event |
@@ -71,7 +71,9 @@ Example: a suspicious executable or script extension (`.exe`, `.ps1`, `.bat`, `.
 ### Design decisions
 - **Idempotent events:** an event's id is a SHA-256 fingerprint of its type, path, timestamp and destination, so the same event submitted twice is stored once (UNIQUE constraint on `event_id`).
 - **Thread safety:** watchdog runs on its own thread; the in-memory event buffer and the SQLite writes are protected by locks.
-- **Safe by design:** the watched folder comes only from `.env` (clients cannot redirect it), and nothing is ever modified or killed.
+- **Safe by design:** watched folders come only from `.env` (clients cannot redirect them), and nothing is ever modified or killed.
+- **Noise filter:** skips "folder modified" events, SentinelAI's own database (which would otherwise cause an endless save-and-detect loop), and configurable folders and file types such as `.git`, `node_modules`, `AppData`, and `*.tmp`.
+- **Renames are judged by the new name:** a download finishing as `setup.crdownload` → `setup.exe` is scored as an executable.
 - **Failures never stop monitoring:** every stage catches and logs its own errors.
 - **Layered code:** routers (HTTP) → agents/services (logic) → repositories (SQL) → SQLite.
 
@@ -111,6 +113,18 @@ Interactive docs: `http://127.0.0.1:8000/docs`
 
 ---
 
+## Choosing what to watch
+
+Set `MONITORED_DIRECTORY` in `backend/.env`, then restart the server.
+
+| Goal | Value |
+| --- | --- |
+| Safe demo (default) | `../test_environment` |
+| Where malware usually arrives | `C:\Users\YourName\Downloads;C:\Users\YourName\Desktop` |
+| Your whole user folder | `C:\Users\YourName` |
+
+Separate several folders with `;`. A folder inside another watched folder is merged automatically. Watching an entire drive such as `C:\` is not recommended: Windows writes to system folders constantly, which buries real alerts. Adjust `IGNORE_PATTERNS` to skip anything else that is noisy on your machine.
+
 ## Run it
 
 ```powershell
@@ -131,7 +145,7 @@ cd backend
 pytest -q
 ```
 
-194 tests cover event processing, investigation, scoring, decisions, recommendations, orchestration, persistence, live monitoring with alerts, process monitoring, the dashboard, and the API. Tests use temporary folders and a temporary database, so they never touch real files or data.
+203 tests cover event processing, investigation, scoring, decisions, recommendations, orchestration, persistence, live monitoring with alerts, multi-folder watching and the noise filter, process monitoring, the dashboard, and the API. Tests use temporary folders and a temporary database, so they never touch real files or data.
 
 ## Project structure
 
@@ -154,7 +168,7 @@ test_environment/  safe sandbox folder that is monitored
 ```
 
 ## Development history
-Built in phases: foundation (1), MonitorAgent (2), processing pipeline (3), analysis and scoring (4), orchestration (5), security agent (6), decision engine (7), recommendations and explainability (8), central orchestrator (9), SQLite persistence (10), process monitoring (11), real-time analysis with alerts and statistics (12), and a live web dashboard (13). `PHASE1_GUIDE.md` and `PHASE2_GUIDE.md` document the first two phases in detail.
+Built in phases: foundation (1), MonitorAgent (2), processing pipeline (3), analysis and scoring (4), orchestration (5), security agent (6), decision engine (7), recommendations and explainability (8), central orchestrator (9), SQLite persistence (10), process monitoring (11), real-time analysis with alerts and statistics (12), a live web dashboard (13), and multi-folder watching with a noise filter (14). `PHASE1_GUIDE.md` and `PHASE2_GUIDE.md` document the first two phases in detail.
 
 ## Possible next steps
 - Email or Slack notifications for ESCALATE decisions

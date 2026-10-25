@@ -193,6 +193,14 @@ function timeOf(iso) {
   return isNaN(d) ? iso : d.toLocaleTimeString();
 }
 
+function fileLabel(e) {
+  const name = e.file_name || e.path;
+  if (e.event_type === "moved" && e.destination_path) {
+    return name + " → " + e.destination_path.split(/[\\/]/).pop();
+  }
+  return name;
+}
+
 function emptyRow(tbody, cols, text) {
   const tr = el("tr"); const td = el("td", "empty", text); td.colSpan = cols; tr.appendChild(td); tbody.appendChild(tr);
 }
@@ -208,9 +216,11 @@ function renderMonitor(s) {
   $("monText").textContent = s.running ? "Monitoring" : "Stopped";
   $("startBtn").disabled = s.running;
   $("stopBtn").disabled = !s.running;
-  $("watching").textContent = s.watching
-    ? `Watching ${s.watching}  ·  ${s.event_count} events in memory  ·  ${s.alert_count} live alerts this session`
-    : "Not watching any folder yet. Click Start monitoring, then create a file in test_environment/.";
+  const folders = (s.watching_all && s.watching_all.length) ? s.watching_all : (s.watching ? [s.watching] : []);
+  $("watching").textContent = folders.length
+    ? `Watching ${folders.join("  |  ")}  ·  ${s.event_count} events in memory  ·  ` +
+      `${s.alert_count} live alerts  ·  ${s.ignored_count || 0} noise events skipped`
+    : "Not watching yet. Click Start monitoring, then create or rename a file in a watched folder.";
 }
 
 function renderStats(st) {
@@ -242,7 +252,7 @@ function renderAlerts(alerts) {
   for (const a of alerts) {
     const tr = el("tr", "clickable");
     cell(tr, timeOf(a.created_at));
-    const f = cell(tr, a.file_name || a.path, "file"); f.title = a.path;
+    const f = cell(tr, fileLabel(a), "file"); f.title = a.destination_path || a.path;
     cell(tr, "").appendChild(badge(a.threat_level));
     cell(tr, a.threat_score, "num");
     cell(tr, "").appendChild(badge(a.decision));
@@ -255,7 +265,7 @@ function renderAlerts(alerts) {
     if (openAlerts.has(a.event_id)) {
       const d = el("tr", "detail"); const td = el("td"); td.colSpan = 5;
       td.appendChild(el("div", "file", a.summary));
-      td.appendChild(el("div", "sub", a.path));
+      td.appendChild(el("div", "sub", a.destination_path ? `${a.path} → ${a.destination_path}` : a.path));
       td.appendChild(el("p", null, a.explanation));
       if ((a.evidence || []).length) {
         td.appendChild(el("strong", null, "Evidence"));
@@ -280,7 +290,7 @@ function renderEvents(events) {
     const tr = el("tr");
     cell(tr, timeOf(e.created_at));
     cell(tr, e.event_type + (e.is_directory ? " (folder)" : ""));
-    const f = cell(tr, e.file_name || e.path, "file"); f.title = e.path;
+    const f = cell(tr, fileLabel(e), "file"); f.title = e.destination_path || e.path;
     cell(tr, "").appendChild(badge(e.threat_level));
     cell(tr, e.threat_score, "num");
     cell(tr, "").appendChild(badge(e.decision));

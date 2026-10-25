@@ -20,6 +20,20 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+# Noise that would bury real alerts when watching big folders: version control,
+# Python/Node caches, app data, the recycle bin, and temporary/partial files.
+DEFAULT_IGNORE_PATTERNS = (
+    ".git;__pycache__;.pytest_cache;node_modules;venv;.venv;"
+    "AppData;$Recycle.Bin;System Volume Information;"
+    "*.tmp;*.crdownload;*.part;*.partial;*.log"
+)
+
+
+def split_setting_list(value: str) -> list[str]:
+    """Split a ";"-separated setting into a list of trimmed, non-empty items."""
+    return [item.strip() for item in (value or "").split(";") if item.strip()]
+
+
 @dataclass
 class Settings:
     """
@@ -33,7 +47,11 @@ class Settings:
     app_name: str
     app_env: str
     log_level: str
+    # One folder, or several separated by ";"
+    # e.g. C:\\Users\\me\\Downloads;C:\\Users\\me\\Desktop
     monitored_directory: str
+    # Folder names and "*.ext" file patterns to skip, separated by ";"
+    ignore_patterns: str
 
 
 def get_settings() -> Settings:
@@ -48,6 +66,7 @@ def get_settings() -> Settings:
         app_env=os.getenv("APP_ENV", "development"),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         monitored_directory=os.getenv("MONITORED_DIRECTORY", "../test_environment"),
+        ignore_patterns=os.getenv("IGNORE_PATTERNS", DEFAULT_IGNORE_PATTERNS),
     )
 
 

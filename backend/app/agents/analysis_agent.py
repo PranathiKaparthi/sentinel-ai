@@ -14,6 +14,8 @@ explainable score.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -185,6 +187,17 @@ class AnalysisAgent:
             reasons.append(
                 f"The file extension {extension} is commonly associated with executable or script payloads."
             )
+        elif event_type == "moved" and event.destination_path:
+            # A rename to an executable is how many payloads (and browser
+            # downloads: file.crdownload -> file.exe) arrive, so the NEW name
+            # matters more than the old one.
+            new_extension = Path(event.destination_path.replace("\\", "/")).suffix.lower()
+            if new_extension in _SUSPICIOUS_EXTENSIONS:
+                suspicion_score += 70
+                findings.append(f"File renamed to a suspicious extension: {new_extension}")
+                reasons.append(
+                    f"The file was renamed to {new_extension}, an extension commonly used by executable or script payloads."
+                )
 
         if investigation is not None:
             if investigation.exists is False:
