@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SentinelAI Dashboard</title>
+<!--
+  SentinelAI live dashboard.
+
+  A single static page served by FastAPI at /dashboard. It has no build step
+  and no framework: plain JavaScript polls the existing REST API every few
+  seconds and redraws the panels.
+
+    every 3 s   GET /api/monitor/status, /api/security/stats,
+                    /api/security/alerts, /api/security/events
+    every 6 s   GET /api/system/status        (CPU, memory)
+    every 15 s  GET /api/system/processes     (top by CPU)
+                GET /api/system/processes/suspicious
+
+  All text from the API is inserted with textContent (never innerHTML), so a
+  file named "<script>.exe" is shown as text instead of running as code.
+-->
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #ffffff; --text: #1d2330; --muted: #667085;
+    --border: #e3e6eb; --accent: #2f5bd3;
+    --low: #1f9d55; --medium: #c98a00; --high: #e0592a; --critical: #c81e1e;
+    --low-bg: #e6f6ed; --medium-bg: #fdf3dc; --high-bg: #fde9e1; --critical-bg: #fbe3e3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #11141a; --panel: #1a1f28; --text: #e7eaf0; --muted: #98a2b3;
+      --border: #2a3140; --accent: #7a9cff;
+      --low-bg: #12301f; --medium-bg: #33280c; --high-bg: #3a1d12; --critical-bg: #3a1414;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         background: var(--bg); color: var(--text); }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;
+           padding: 14px 24px; background: var(--panel); border-bottom: 1px solid var(--border); }
+  h1 { font-size: 18px; margin: 0; }
+  h1 span { color: var(--muted); font-weight: 400; font-size: 13px; margin-left: 8px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 10px; }
+  main { padding: 20px 24px; display: grid; gap: 16px; grid-template-columns: repeat(12, 1fr); max-width: 1400px; margin: 0 auto; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; min-width: 0; }
+  .span-12 { grid-column: span 12; } .span-8 { grid-column: span 8; } .span-4 { grid-column: span 4; }
+  .span-6 { grid-column: span 6; }
+  @media (max-width: 900px) { .span-8, .span-4, .span-6 { grid-column: span 12; } }
+  .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  button { font: inherit; border: 1px solid var(--border); background: var(--panel); color: var(--text);
+           padding: 6px 14px; border-radius: 6px; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
+          font-size: 12px; font-weight: 600; background: var(--bg); border: 1px solid var(--border); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .pill.on .dot { background: var(--low); box-shadow: 0 0 0 3px var(--low-bg); }
+  .watching { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .kpi { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .kpi .label { color: var(--muted); font-size: 12px; }
+  .kpi .value { font-size: 26px; font-weight: 650; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .kpi.alert .value { color: var(--high); }
+  .bar { display: flex; height: 14px; border-radius: 7px; overflow: hidden; background: var(--bg); }
+  .bar div { height: 100%; transition: width .4s; }
+  .legend { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 12px; }
+  .legend .n { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .legend .l { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .sw { width: 10px; height: 10px; border-radius: 2px; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 500; padding: 6px 8px;
+       border-bottom: 1px solid var(--border); }
+  td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; }
+  th.num { text-align: right; }
+  tr.clickable { cursor: pointer; } tr.clickable:hover td { background: var(--bg); }
+  .file { font-weight: 550; overflow-wrap: anywhere; }
+  td.file { min-width: 120px; }
+  .sub { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 650; }
+  .LOW { color: var(--low); background: var(--low-bg); }
+  .MEDIUM { color: var(--medium); background: var(--medium-bg); }
+  .HIGH { color: var(--high); background: var(--high-bg); }
+  .CRITICAL { color: var(--critical); background: var(--critical-bg); }
+  .ALLOW { color: var(--low); background: var(--low-bg); }
+  .ALERT { color: var(--medium); background: var(--medium-bg); }
+  .ESCALATE { color: var(--critical); background: var(--critical-bg); }
+  .detail td { background: var(--bg); font-size: 13px; }
+  .detail ul { margin: 4px 0 8px 18px; padding: 0; }
+  .empty { color: var(--muted); padding: 14px 8px; text-align: center; }
+  .banner { display: none; grid-column: span 12; padding: 10px 14px; border-radius: 8px;
+            background: var(--critical-bg); color: var(--critical); }
+  .banner.show { display: block; }
+  .updated { color: var(--muted); font-size: 12px; }
+  .scroll { overflow-x: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SentinelAI <span>Live security monitoring</span></h1>
+  <div class="controls">
+    <span id="monPill" class="pill"><span class="dot"></span><span id="monText">Checking…</span></span>
+    <button id="startBtn" class="primary">Start monitoring</button>
+    <button id="stopBtn">Stop</button>
+    <span class="updated" id="updated"></span>
+  </div>
+</header>
+
+<main>
+  <div id="banner" class="banner"></div>
+
+  <div class="span-12">
+    <div class="watching" id="watching"></div>
+  </div>
+
+  <section class="span-12 kpis">
+    <div class="kpi"><div class="label">Events analysed</div><div class="value" id="kTotal">–</div></div>
+    <div class="kpi alert"><div class="label">Alerts (ALERT + ESCALATE)</div><div class="value" id="kAlerts">–</div></div>
+    <div class="kpi"><div class="label">Average threat score</div><div class="value" id="kAvg">–</div></div>
+    <div class="kpi"><div class="label">CPU usage</div><div class="value" id="kCpu">–</div></div>
+    <div class="kpi"><div class="label">Memory usage</div><div class="value" id="kMem">–</div></div>
+  </section>
+
+  <section class="panel span-12">
+    <h2>Events by threat level</h2>
+    <div class="bar" id="levelBar"></div>
+    <div class="legend" id="levelLegend"></div>
+  </section>
+
+  <section class="panel span-8">
+    <h2>Latest alerts <span class="sub">(click a row for the explanation)</span></h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Time</th><th>File</th><th>Level</th><th class="num">Score</th><th>Decision</th></tr></thead>
+        <tbody id="alertsBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel span-4">
+    <h2>Suspicious processes</h2>
+    <div id="suspicious"></div>
+    <h2 style="margin-top:18px">Top processes by CPU</h2>
+    <table>
+      <thead><tr><th>Process</th><th class="num">CPU %</th><th class="num">Risk</th></tr></thead>
+      <tbody id="topBody"></tbody>
+    </table>
+  </section>
+
+  <section class="panel span-12">
+    <h2>Recent events</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Time</th><th>Event</th><th>File</th><th>Level</th><th class="num">Score</th><th>Decision</th><th>Summary</th></tr></thead>
+        <tbody id="eventsBody"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+const LEVELS = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
+const COLORS = { LOW: "var(--low)", MEDIUM: "var(--medium)", HIGH: "var(--high)", CRITICAL: "var(--critical)" };
+const openAlerts = new Set();   // alert rows the user has expanded
+
+// ---------- small helpers ----------
+const $ = (id) => document.getElementById(id);
+
+async function api(path, options) {
+  const res = await fetch(path, options);
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { detail = (await res.json()).detail || detail; } catch (_) {}
+    throw new Error(`${path}: ${detail}`);
+  }
+  return res.json();
+}
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined && text !== null) node.textContent = String(text);  // textContent = XSS-safe
+  return node;
+}
+
+function cell(row, text, className) { const td = el("td", className, text); row.appendChild(td); return td; }
+function badge(value) { return el("span", "badge " + value, value); }
+
+function timeOf(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return isNaN(d) ? iso : d.toLocaleTimeString();
+}
+
+function emptyRow(tbody, cols, text) {
+  const tr = el("tr"); const td = el("td", "empty", text); td.colSpan = cols; tr.appendChild(td); tbody.appendChild(tr);
+}
+
+function showError(message) {
+  const b = $("banner");
+  if (message) { b.textContent = message; b.classList.add("show"); } else { b.classList.remove("show"); }
+}
+
+// ---------- renderers ----------
+function renderMonitor(s) {
+  $("monPill").classList.toggle("on", s.running);
+  $("monText").textContent = s.running ? "Monitoring" : "Stopped";
+  $("startBtn").disabled = s.running;
+  $("stopBtn").disabled = !s.running;
+  $("watching").textContent = s.watching
+    ? `Watching ${s.watching}  ·  ${s.event_count} events in memory  ·  ${s.alert_count} live alerts this session`
+    : "Not watching any folder yet. Click Start monitoring, then create a file in test_environment/.";
+}
+
+function renderStats(st) {
+  $("kTotal").textContent = st.total_events;
+  $("kAlerts").textContent = (st.by_decision.ALERT || 0) + (st.by_decision.ESCALATE || 0);
+  $("kAvg").textContent = st.average_threat_score;
+
+  const bar = $("levelBar"); bar.replaceChildren();
+  const legend = $("levelLegend"); legend.replaceChildren();
+  const total = st.total_events || 0;
+  for (const lvl of LEVELS) {
+    const n = st.by_threat_level[lvl] || 0;
+    if (total > 0 && n > 0) {
+      const seg = el("div"); seg.style.width = (100 * n / total) + "%"; seg.style.background = COLORS[lvl];
+      seg.title = `${lvl}: ${n}`; bar.appendChild(seg);
+    }
+    const item = el("div");
+    item.appendChild(el("div", "n", n));
+    const label = el("div", "l"); const sw = el("span", "sw"); sw.style.background = COLORS[lvl];
+    label.append(sw, lvl); item.appendChild(label);
+    legend.appendChild(item);
+  }
+}
+
+function renderAlerts(alerts) {
+  const tbody = $("alertsBody"); tbody.replaceChildren();
+  if (!alerts.length) { emptyRow(tbody, 5, "No alerts yet. Try creating a .exe or .ps1 file in the watched folder."); return; }
+
+  for (const a of alerts) {
+    const tr = el("tr", "clickable");
+    cell(tr, timeOf(a.created_at));
+    const f = cell(tr, a.file_name || a.path, "file"); f.title = a.path;
+    cell(tr, "").appendChild(badge(a.threat_level));
+    cell(tr, a.threat_score, "num");
+    cell(tr, "").appendChild(badge(a.decision));
+    tr.addEventListener("click", () => {
+      openAlerts.has(a.event_id) ? openAlerts.delete(a.event_id) : openAlerts.add(a.event_id);
+      renderAlerts(alerts);
+    });
+    tbody.appendChild(tr);
+
+    if (openAlerts.has(a.event_id)) {
+      const d = el("tr", "detail"); const td = el("td"); td.colSpan = 5;
+      td.appendChild(el("div", "file", a.summary));
+      td.appendChild(el("div", "sub", a.path));
+      td.appendChild(el("p", null, a.explanation));
+      if ((a.evidence || []).length) {
+        td.appendChild(el("strong", null, "Evidence"));
+        const ul = el("ul"); a.evidence.forEach((e) => ul.appendChild(el("li", null, e))); td.appendChild(ul);
+      }
+      if ((a.recommended_actions || []).length) {
+        td.appendChild(el("strong", null, "Recommended next steps"));
+        const ul = el("ul"); a.recommended_actions.forEach((e) => ul.appendChild(el("li", null, e))); td.appendChild(ul);
+      }
+      td.appendChild(el("div", "sub",
+        `Recommended action: ${a.recommended_action} · Human review: ${a.requires_human_review ? "yes" : "no"} · ` +
+        `Automated action taken: ${a.automated_action ? "yes" : "no"} · Confidence: ${a.confidence}`));
+      d.appendChild(td); tbody.appendChild(d);
+    }
+  }
+}
+
+function renderEvents(events) {
+  const tbody = $("eventsBody"); tbody.replaceChildren();
+  if (!events.length) { emptyRow(tbody, 7, "No events stored yet."); return; }
+  for (const e of events) {
+    const tr = el("tr");
+    cell(tr, timeOf(e.created_at));
+    cell(tr, e.event_type + (e.is_directory ? " (folder)" : ""));
+    const f = cell(tr, e.file_name || e.path, "file"); f.title = e.path;
+    cell(tr, "").appendChild(badge(e.threat_level));
+    cell(tr, e.threat_score, "num");
+    cell(tr, "").appendChild(badge(e.decision));
+    cell(tr, e.summary, "sub");
+    tbody.appendChild(tr);
+  }
+}
+
+function renderSystem(sys) {
+  $("kCpu").textContent = sys.cpu_usage + "%";
+  $("kMem").textContent = sys.memory_usage + "%";
+}
+
+function renderProcesses(top, suspicious) {
+  const box = $("suspicious"); box.replaceChildren();
+  if (!suspicious.processes.length) {
+    box.appendChild(el("div", "sub", "None flagged. Every running process scored below MEDIUM."));
+  } else {
+    for (const p of suspicious.processes) {
+      const item = el("div"); item.style.marginBottom = "10px";
+      const head = el("div", "file", `${p.name} (PID ${p.pid}) `); head.appendChild(badge(p.risk_level));
+      item.appendChild(head);
+      p.reasons.forEach((r) => item.appendChild(el("div", "sub", "• " + r)));
+      box.appendChild(item);
+    }
+  }
+
+  const tbody = $("topBody"); tbody.replaceChildren();
+  for (const p of top.processes.slice(0, 6)) {
+    const tr = el("tr");
+    const n = cell(tr, p.name, "file"); n.title = p.exe || "";
+    cell(tr, p.cpu_percent.toFixed(1), "num");
+    cell(tr, p.risk_score, "num");
+    tbody.appendChild(tr);
+  }
+}
+
+// ---------- polling loops (each waits for its own request before scheduling the next) ----------
+function loop(fn, ms) {
+  const run = async () => {
+    try { await fn(); showError(""); }
+    catch (err) { showError("Cannot reach the SentinelAI API. Is the server running? (" + err.message + ")"); }
+    setTimeout(run, ms);
+  };
+  run();
+}
+
+async function refreshFast() {
+  const [status, stats, alerts, events] = await Promise.all([
+    api("/api/monitor/status"),
+    api("/api/security/stats"),
+    api("/api/security/alerts?limit=10"),
+    api("/api/security/events?limit=15"),
+  ]);
+  renderMonitor(status); renderStats(stats); renderAlerts(alerts.alerts); renderEvents(events.events);
+  $("updated").textContent = "Updated " + new Date().toLocaleTimeString();
+}
+async function refreshSystem() { renderSystem(await api("/api/system/status")); }
+async function refreshProcesses() {
+  const top = await api("/api/system/processes?limit=6&sort_by=cpu");
+  const suspicious = await api("/api/system/processes/suspicious");
+  renderProcesses(top, suspicious);
+}
+
+$("startBtn").addEventListener("click", async () => {
+  try { renderMonitor(await api("/api/monitor/start", { method: "POST" })); showError(""); }
+  catch (err) { showError(err.message); }
+});
+$("stopBtn").addEventListener("click", async () => {
+  try { renderMonitor(await api("/api/monitor/stop", { method: "POST" })); } catch (err) { showError(err.message); }
+});
+
+loop(refreshFast, 3000);
+loop(refreshSystem, 6000);
+loop(refreshProcesses, 15000);
+</script>
+</body>
+</html>

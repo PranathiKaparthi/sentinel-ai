@@ -4,7 +4,7 @@
 
 SentinelAI watches a sandbox folder and the running processes on a machine, scores what it sees with transparent rules, decides whether a human needs to look, explains why, and stores every result in SQLite. It is **observation-only**: it never deletes, quarantines, or kills anything.
 
-Built with Python, FastAPI, Watchdog, psutil, SQLite, and Pytest (190 automated tests).
+Built with Python, FastAPI, Watchdog, psutil, SQLite, and Pytest (194 automated tests), with a live web dashboard.
 
 ---
 
@@ -77,6 +77,19 @@ Example: a suspicious executable or script extension (`.exe`, `.ps1`, `.bat`, `.
 
 ---
 
+## Dashboard
+
+Open `http://127.0.0.1:8000/dashboard` while the server is running.
+
+- Start and stop live monitoring with one click
+- Totals: events analysed, alerts, average threat score, CPU and memory
+- Events by threat level (LOW, MEDIUM, HIGH, CRITICAL)
+- Latest alerts: click a row to see the explanation, evidence, and recommended next steps
+- Suspicious processes with reasons, and the top processes by CPU
+- Recent events, refreshed every 3 seconds
+
+It is one static HTML file (`backend/app/static/dashboard.html`) with plain JavaScript and no build step. It polls the REST API below, and inserts all API text with `textContent`, so a malicious file name cannot inject HTML.
+
 ## API
 
 Interactive docs: `http://127.0.0.1:8000/docs`
@@ -109,7 +122,7 @@ copy .env.example .env
 uvicorn app.main:app --reload
 ```
 
-Then open `http://127.0.0.1:8000/docs`, call `POST /api/monitor/start`, and create a file such as `test.exe` inside `test_environment/`. `GET /api/monitor/status` and `GET /api/security/alerts` will show the alert.
+Then open `http://127.0.0.1:8000/dashboard`, click **Start monitoring**, and create a file such as `test.exe` inside `test_environment/`. The alert appears within a few seconds. Every endpoint can also be tried at `http://127.0.0.1:8000/docs`.
 
 ## Tests
 
@@ -118,7 +131,7 @@ cd backend
 pytest -q
 ```
 
-190 tests cover event processing, investigation, scoring, decisions, recommendations, orchestration, persistence, live monitoring with alerts, process monitoring, and the API. Tests use temporary folders and a temporary database, so they never touch real files or data.
+194 tests cover event processing, investigation, scoring, decisions, recommendations, orchestration, persistence, live monitoring with alerts, process monitoring, the dashboard, and the API. Tests use temporary folders and a temporary database, so they never touch real files or data.
 
 ## Project structure
 
@@ -131,7 +144,8 @@ backend/
     repositories/  security_event_repository (all SQL)
     db/            database (SQLite connection + schema)
     models/        dataclasses / pydantic models for each stage's result
-    routers/       health, system, monitor, investigation, analysis, pipeline, security
+    routers/       health, system, monitor, investigation, analysis, pipeline, security, dashboard
+    static/        dashboard.html (live web dashboard)
     utils/         logger
     config.py      settings from .env
     main.py        FastAPI app
@@ -140,10 +154,9 @@ test_environment/  safe sandbox folder that is monitored
 ```
 
 ## Development history
-Built in phases: foundation (1), MonitorAgent (2), processing pipeline (3), analysis and scoring (4), orchestration (5), security agent (6), decision engine (7), recommendations and explainability (8), central orchestrator (9), SQLite persistence (10), process monitoring (11), and real-time analysis with alerts and statistics (12). `PHASE1_GUIDE.md` and `PHASE2_GUIDE.md` document the first two phases in detail.
+Built in phases: foundation (1), MonitorAgent (2), processing pipeline (3), analysis and scoring (4), orchestration (5), security agent (6), decision engine (7), recommendations and explainability (8), central orchestrator (9), SQLite persistence (10), process monitoring (11), real-time analysis with alerts and statistics (12), and a live web dashboard (13). `PHASE1_GUIDE.md` and `PHASE2_GUIDE.md` document the first two phases in detail.
 
 ## Possible next steps
-- React dashboard for alerts and statistics
 - Email or Slack notifications for ESCALATE decisions
 - Feed process risk into the same decision and persistence pipeline
 - Baseline-based anomaly detection (learn normal activity, flag deviations)
