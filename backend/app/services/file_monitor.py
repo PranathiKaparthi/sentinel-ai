@@ -27,11 +27,23 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
+import logging
+
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 # The shape of the callback FileMonitor invokes for every normalized event.
 EventCallback = Callable[[dict], None]
+
+logger = logging.getLogger("SentinelAI.FileMonitor")
+
+
+def _safe_resolve(path: str) -> str:
+    """Absolute path; falls back to the raw path if the OS refuses (e.g. cloud placeholders)."""
+    try:
+        return str(Path(path).resolve())
+    except (OSError, RuntimeError, ValueError):
+        return str(path)
 
 
 def _now_iso() -> str:
@@ -56,19 +68,23 @@ class _NormalizingEventHandler(FileSystemEventHandler):
         is_directory: bool,
         destination_path: Optional[str] = None,
     ) -> None:
-        self._callback(
-            {
-                "event_type": event_type,
-                "path": str(Path(path).resolve()),
-                "timestamp": _now_iso(),
-                "is_directory": is_directory,
-                "destination_path": (
-                    str(Path(destination_path).resolve())
-                    if destination_path
-                    else None
-                ),
-            }
-        )
+        # Any exception escaping here would kill watchdog's observer thread
+        # and silently stop all monitoring, so one bad event is logged and
+        # skipped instead.
+        try:
+            self._callback(
+                {
+                    "event_type": event_type,
+                    "path": _safe_resolve(path),
+                    "timestamp": _now_iso(),
+                    "is_directory": is_directory,
+                    "destination_path": (
+                        _safe_resolve(destination_path) if destination_path else None
+                    ),
+                }
+            )
+        except Exception:
+            logger.exception("Failed to handle %s event for %s; continuing", event_type, path)
 
     def on_created(self, event):
         self._emit("created", event.src_path, event.is_directory)

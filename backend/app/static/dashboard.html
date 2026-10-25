@@ -212,6 +212,9 @@ function showError(message) {
 
 // ---------- renderers ----------
 function renderMonitor(s) {
+  if (s.running && s.watchers_alive === false) {
+    showError("Monitoring stopped working (a folder watcher thread ended). Click Stop, then Start monitoring, and check the server window for errors.");
+  }
   $("monPill").classList.toggle("on", s.running);
   $("monText").textContent = s.running ? "Monitoring" : "Stopped";
   $("startBtn").disabled = s.running;
@@ -331,7 +334,7 @@ function renderProcesses(top, suspicious) {
 // ---------- polling loops (each waits for its own request before scheduling the next) ----------
 function loop(fn, ms) {
   const run = async () => {
-    try { await fn(); showError(""); }
+    try { await fn(); }
     catch (err) { showError("Cannot reach the SentinelAI API. Is the server running? (" + err.message + ")"); }
     setTimeout(run, ms);
   };
@@ -345,7 +348,7 @@ async function refreshFast() {
     api("/api/security/alerts?limit=10"),
     api("/api/security/events?limit=15"),
   ]);
-  renderMonitor(status); renderStats(stats); renderAlerts(alerts.alerts); renderEvents(events.events);
+  showError(""); renderMonitor(status); renderStats(stats); renderAlerts(alerts.alerts); renderEvents(events.events);
   $("updated").textContent = "Updated " + new Date().toLocaleTimeString();
 }
 async function refreshSystem() { renderSystem(await api("/api/system/status")); }

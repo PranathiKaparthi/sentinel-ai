@@ -190,3 +190,28 @@ def test_database_inside_watched_folder_does_not_loop(tmp_path, monkeypatch):
         agent.stop()
         orchestrator.stop()
         Database().close()
+
+
+def test_a_failing_event_does_not_kill_the_watcher(tmp_path, monkeypatch):
+    """One bad event must be skipped, not stop monitoring for good."""
+    monkeypatch.setattr(config_module.settings, "monitored_directory", str(tmp_path))
+    agent = MonitorAgent(name="Robust")
+    calls = {"n": 0}
+    original = agent._is_ignored
+
+    def flaky(raw_event):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("simulated Windows/OneDrive error")
+        return original(raw_event)
+
+    monkeypatch.setattr(agent, "_is_ignored", flaky)
+    agent.start()
+    try:
+        (tmp_path / "first.txt").write_text("1")
+        assert _wait_until(lambda: calls["n"] >= 1)
+        (tmp_path / "second.txt").write_text("2")
+        assert _wait_until(lambda: any(p.endswith("second.txt") for p in _paths(agent)))
+        assert agent.get_status()["watchers_alive"] is True
+    finally:
+        agent.stop()

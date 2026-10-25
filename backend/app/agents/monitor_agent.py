@@ -270,7 +270,12 @@ class MonitorAgent(BaseAgent):
         to the pipeline layer and future API/alerting layers.
         """
 
-        if self._is_ignored(raw_event):
+        try:
+            ignored = self._is_ignored(raw_event)
+        except Exception:
+            self.logger.exception("Noise filter failed for %r; analysing anyway", raw_event)
+            ignored = False
+        if ignored:
             with self._events_lock:
                 self._ignored_count += 1
             return
@@ -475,6 +480,9 @@ class MonitorAgent(BaseAgent):
                 else None
             ),
             "watching_all": [str(p) for p in self._watch_paths],
+            # False while "running" means a watcher thread died: restart monitoring.
+            "watchers_alive": bool(self._file_monitors)
+            and all(m.is_active for m in self._file_monitors),
             "event_count": event_count,
             "ignored_count": ignored_count,
             "real_time_analysis": self._event_sink is not None,

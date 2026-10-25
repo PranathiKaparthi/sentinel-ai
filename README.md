@@ -4,7 +4,7 @@
 
 SentinelAI watches one or more folders (a sandbox by default, or real folders such as Downloads and Desktop) and the running processes on a machine, scores what it sees with transparent rules, decides whether a human needs to look, explains why, and stores every result in SQLite. It is **observation-only**: it never deletes, quarantines, or kills anything.
 
-Built with Python, FastAPI, Watchdog, psutil, SQLite, and Pytest (208 automated tests), with a live web dashboard.
+Built with Python, FastAPI, Watchdog, psutil, SQLite, and Pytest (209 automated tests), with a live web dashboard.
 
 ---
 
@@ -145,7 +145,7 @@ cd backend
 pytest -q
 ```
 
-208 tests cover event processing, investigation, scoring, decisions, recommendations, orchestration, persistence, live monitoring with alerts, multi-folder watching and the noise filter, process monitoring, the dashboard, and the API. Tests use temporary folders and a temporary database, so they never touch real files or data.
+209 tests cover event processing, investigation, scoring, decisions, recommendations, orchestration, persistence, live monitoring with alerts, multi-folder watching and the noise filter, process monitoring, the dashboard, and the API. Tests use temporary folders and a temporary database, so they never touch real files or data.
 
 ## Project structure
 
