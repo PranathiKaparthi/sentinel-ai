@@ -103,6 +103,7 @@
     <span id="monPill" class="pill"><span class="dot"></span><span id="monText">Checking…</span></span>
     <button id="startBtn" class="primary">Start monitoring</button>
     <button id="stopBtn">Stop</button>
+    <button id="demoBtn" hidden>Simulate activity</button>
     <span class="updated" id="updated"></span>
   </div>
 </header>
@@ -364,6 +365,15 @@ $("startBtn").addEventListener("click", async () => {
 });
 $("stopBtn").addEventListener("click", async () => {
   try { renderMonitor(await api("/api/monitor/stop", { method: "POST" })); } catch (err) { showError(err.message); }
+});
+
+// Demo button: only shown when the server has ENABLE_DEMO=true.
+api("/api/demo/status").then((d) => { if (d.enabled) $("demoBtn").hidden = false; }).catch(() => {});
+$("demoBtn").addEventListener("click", async () => {
+  $("demoBtn").disabled = true;
+  try { await api("/api/demo/simulate", { method: "POST" }); showError(""); refreshFast(); }
+  catch (err) { showError(err.message); }
+  finally { setTimeout(() => { $("demoBtn").disabled = false; }, 2000); }
 });
 
 loop(refreshFast, 3000);
