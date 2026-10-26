@@ -174,3 +174,20 @@ Built in phases: foundation (1), MonitorAgent (2), processing pipeline (3), anal
 - Email or Slack notifications for ESCALATE decisions
 - Feed process risk into the same decision and persistence pipeline
 - Baseline-based anomaly detection (learn normal activity, flag deviations)
+
+## Deploy (Render, free)
+
+The repo includes a `Dockerfile` and `render.yaml`.
+
+1. Sign in at render.com with GitHub.
+2. Choose **New → Blueprint** and select this repository.
+3. When the deploy finishes, open `https://<your-service>.onrender.com/dashboard`.
+
+The hosted app watches its own `test_environment` folder (not your computer), starts monitoring automatically, and shows a **Simulate activity** button that creates harmless sample files so visitors can watch ALLOW / ESCALATE decisions happen live. On the free plan the service sleeps when idle and its SQLite history resets on restart.
+
+Run the same container locally:
+
+```bash
+docker build -t sentinel-ai .
+docker run -p 8000:8000 sentinel-ai
+```

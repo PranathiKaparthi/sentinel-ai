@@ -9,6 +9,7 @@ detection logic in app/agents/ and app/services/, and database access in
 app/repositories/.
 """
 
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -18,6 +19,7 @@ from app.utils.logger import get_logger
 from app.routers import (
     analysis,
     dashboard,
+    demo,
     health,
     investigation,
     monitor,
@@ -37,6 +39,13 @@ async def lifespan(_: FastAPI):
         settings.app_env,
         settings.log_level,
     )
+    # On a hosted deployment, start watching immediately so the dashboard
+    # is live as soon as someone opens it.
+    if os.getenv("AUTO_START_MONITOR", "false").strip().lower() in {"1", "true", "yes"}:
+        try:
+            monitor.start_monitor()
+        except Exception as exc:  # never block startup on the watcher
+            logger.warning("Auto-start of monitoring failed: %s", exc)
     yield
     monitor.shutdown()
     logger.info("%s shut down cleanly", settings.app_name)
@@ -60,6 +69,7 @@ app.include_router(analysis.router)
 app.include_router(pipeline.router)
 app.include_router(security.router)
 app.include_router(dashboard.router)
+app.include_router(demo.router)
 
 
 @app.get("/")
